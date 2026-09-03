@@ -12,7 +12,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.PriorityQueue;
 import java.util.Set;
 
 /**
@@ -34,6 +33,11 @@ public final class DijkstraRouter implements Router {
 
     @Override
     public Route findRoute(NodeId source, NodeId target) {
+        return findRoute(source, target, null);
+    }
+
+    /** Finds a route while optionally recording per-query algorithm metrics. */
+    public Route findRoute(NodeId source, NodeId target, RoutingMetrics metrics) {
         requireNode(source, "source");
         requireNode(target, "target");
 
@@ -59,6 +63,9 @@ public final class DijkstraRouter implements Router {
             if (!settled.add(current.node())) {
                 continue;
             }
+            if (metrics != null) {
+                metrics.recordNodeExpanded();
+            }
             if (current.node().equals(target)) {
                 break;
             }
@@ -75,6 +82,9 @@ public final class DijkstraRouter implements Router {
                     previous.put(edge.to(), current.node());
                     previousEdge.put(edge.to(), edge);
                     queue.add(new NodeDistance(edge.to(), candidate));
+                    if (metrics != null) {
+                        metrics.recordEdgeRelaxed();
+                    }
                 }
             }
         }
@@ -117,5 +127,8 @@ public final class DijkstraRouter implements Router {
     }
 
     private record NodeDistance(NodeId node, double distance) {
+    }
+
+    private static final class PriorityQueue<T> extends java.util.PriorityQueue<T> {
     }
 }
