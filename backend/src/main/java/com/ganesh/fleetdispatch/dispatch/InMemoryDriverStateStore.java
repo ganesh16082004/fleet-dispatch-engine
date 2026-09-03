@@ -144,7 +144,7 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
         int minY = cellY(location.latitude() - latitudeDelta);
         int maxY = cellY(location.latitude() + latitudeDelta);
 
-        List<Driver> candidates = new ArrayList<>();
+        List<DriverDistance> candidates = new ArrayList<>();
         for (int x = minX; x <= maxX; x++) {
             for (int y = minY; y <= maxY; y++) {
                 Set<Long> ids = availableByCell.get(new GridCell(x, y));
@@ -157,8 +157,12 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
                         continue;
                     }
                     Location driverLocation = locationOf(driver.currentNode());
-                    if (driverLocation != null && haversineMeters(location, driverLocation) <= radiusMeters) {
-                        candidates.add(driver);
+                    if (driverLocation == null) {
+                        continue;
+                    }
+                    double distance = haversineMeters(location, driverLocation);
+                    if (distance <= radiusMeters) {
+                        candidates.add(new DriverDistance(driver, distance));
                     }
                 }
             }
@@ -166,8 +170,11 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
 
         return candidates.stream()
                 .distinct()
-                .sorted(Comparator.comparingLong(Driver::id))
+                .sorted(Comparator
+                        .comparingDouble(DriverDistance::distanceMeters)
+                        .thenComparingLong(item -> item.driver().id()))
                 .limit(maxCandidates)
+                .map(DriverDistance::driver)
                 .toList();
     }
 
@@ -262,5 +269,8 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
     }
 
     private record GridCell(int x, int y) {
+    }
+
+    private record DriverDistance(Driver driver, double distanceMeters) {
     }
 }
