@@ -23,6 +23,13 @@ public interface DriverStateStore {
      */
     boolean reserveDriver(long driverId, NodeId expectedNode);
 
+    /**
+     * Atomically releases a BUSY driver back to AVAILABLE if it is still at the
+     * expected node. Used to compensate a dispatch reservation that could not
+     * be committed on the order side.
+     */
+    boolean releaseDriver(long driverId, NodeId expectedNode);
+
     List<Driver> getAvailableDrivers();
 
     int size();
