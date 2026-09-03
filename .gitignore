@@ -1,0 +1,28 @@
+# Java
+*.class
+*.jar
+*.war
+*.log
+/target/
+/.gradle/
+/build/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local configuration
+.env
+*.local
+
+# Runtime data
+/data/
+/logs/
