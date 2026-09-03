@@ -60,7 +60,7 @@ public final class DispatchEngine {
         List<RoutedCandidate> routedCandidates = candidateSelector
                 .select(order, searchRadiusMeters, maxCandidates)
                 .stream()
-                .map(this::routeCandidate)
+                .map(candidate -> routeCandidate(candidate, order))
                 .flatMap(Optional::stream)
                 .sorted(Comparator
                         .comparingDouble((RoutedCandidate candidate) -> candidate.route().totalTravelTimeSeconds())
@@ -85,9 +85,9 @@ public final class DispatchEngine {
         return Optional.empty();
     }
 
-    private Optional<RoutedCandidate> routeCandidate(DriverCandidate candidate) {
+    private Optional<RoutedCandidate> routeCandidate(DriverCandidate candidate, Order order) {
         try {
-            Route route = router.findRoute(candidate.driverNode(), candidate.driverNode());
+            Route route = router.findRoute(candidate.driverNode(), order.pickupNode());
             return Optional.of(new RoutedCandidate(candidate, route));
         } catch (IllegalArgumentException ignored) {
             return Optional.empty();
