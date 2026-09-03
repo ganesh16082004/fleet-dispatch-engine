@@ -109,6 +109,46 @@ class DispatchEngineTest {
     }
 
     @Test
+    void shouldAllowWeightedTravelTimeAndDistanceScoring() {
+        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        InMemoryOrderStateStore orders = orderStore();
+        store.addDriver(new Driver(10L, driverA, DriverStatus.AVAILABLE));
+        store.addDriver(new Driver(20L, driverB, DriverStatus.AVAILABLE));
+
+        CandidateSelector selector = new CandidateSelector(store, graph());
+        Router router = (source, target) -> new Route(List.of(source, target),
+                source.equals(driverA) ? 4.0 : 8.0,
+                source.equals(driverA) ? 100.0 : 20.0);
+
+        DispatchCandidateScorer scorer = new WeightedDispatchCandidateScorer(1.0, 0.1);
+        DispatchEngine engine = new DispatchEngine(
+                selector,
+                store,
+                orders,
+                router,
+                scorer,
+                500.0,
+                10);
+
+        Optional<DispatchAssignment> result = engine.dispatch(order());
+
+        assertTrue(result.isPresent());
+        assertEquals(20L, result.orElseThrow().driverId());
+    }
+
+    @Test
+    void shouldRejectInvalidWeightedScoringConfiguration() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new WeightedDispatchCandidateScorer(-1.0, 1.0));
+        assertThrows(IllegalArgumentException.class,
+                () -> new WeightedDispatchCandidateScorer(1.0, -1.0));
+        assertThrows(IllegalArgumentException.class,
+                () -> new WeightedDispatchCandidateScorer(0.0, 0.0));
+        assertThrows(IllegalArgumentException.class,
+                () -> new WeightedDispatchCandidateScorer(Double.NaN, 1.0));
+    }
+
+    @Test
     void shouldReturnEmptyWhenNoDriverIsAvailable() {
         InMemoryDriverStateStore store = new InMemoryDriverStateStore();
         InMemoryOrderStateStore orders = orderStore();
