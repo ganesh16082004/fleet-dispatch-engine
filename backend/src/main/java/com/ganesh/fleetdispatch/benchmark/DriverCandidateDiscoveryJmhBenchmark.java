@@ -13,6 +13,7 @@ import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Group;
 import org.openjdk.jmh.annotations.GroupThreads;
 import org.openjdk.jmh.annotations.Level;
+import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Param;
@@ -20,24 +21,17 @@ import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
-import org.openjdk.jmh.annotations.Measurement;
-import org.openjdk.jmh.annotations.TearDown;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
-/**
- * JMH benchmark for fleet candidate discovery.
- *
- * <p>Compares the original O(N) full scan with the grid-backed query at 10K
- * and 100K drivers. The mixed group also measures seven concurrent readers
- * while one thread continuously moves available drivers.</p>
- */
-@BenchmarkMode({Mode.SampleTime})
+/** JMH benchmark for full-scan versus grid-backed driver candidate discovery. */
+@BenchmarkMode(Mode.SampleTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @Warmup(iterations = 3, time = 1)
 @Measurement(iterations = 5, time = 1)
@@ -57,20 +51,20 @@ public class DriverCandidateDiscoveryJmhBenchmark {
     }
 
     @Benchmark
-    @Group("mixed-grid")
+    @Group("mixedGrid")
     @GroupThreads(7)
     public List<Driver> concurrentGridLookup(BenchmarkState state) {
         return state.gridQuery();
     }
 
     @Benchmark
-    @Group("mixed-grid")
+    @Group("mixedGrid")
     @GroupThreads(1)
     public void concurrentLocationUpdate(BenchmarkState state) {
         state.moveRandomDriver();
     }
 
-    @State(Scope.Group)
+    @State(Scope.Benchmark)
     public static class BenchmarkState {
         @Param({"10000", "100000"})
         public int driverCount;
@@ -84,8 +78,8 @@ public class DriverCandidateDiscoveryJmhBenchmark {
         public void setup() {
             Random random = new Random(42L);
             Map<NodeId, RoadNode> nodes = new java.util.HashMap<>(driverCount + 1);
-            NodeId queryNodeId = new NodeId(0L);
             query = new Location(12.9716, 77.5946);
+            NodeId queryNodeId = new NodeId(0L);
             nodes.put(queryNodeId, new RoadNode(queryNodeId, query));
 
             List<Driver> drivers = new ArrayList<>(driverCount);
@@ -127,8 +121,7 @@ public class DriverCandidateDiscoveryJmhBenchmark {
             }
 
             return candidates.stream()
-                    .sorted(java.util.Comparator
-                            .comparingDouble(DriverDistance::distanceMeters)
+                    .sorted(Comparator.comparingDouble(DriverDistance::distanceMeters)
                             .thenComparingLong(item -> item.driver().id()))
                     .limit(MAX_CANDIDATES)
                     .map(DriverDistance::driver)
@@ -142,20 +135,11 @@ public class DriverCandidateDiscoveryJmhBenchmark {
             store.updateLocation(driver.id(), newNode);
         }
 
-        @TearDown(Level.Trial)
-        public void tearDown() {
-            store = null;
-            graph = null;
-            query = null;
-            allDrivers = null;
-        }
-
         private static double haversineMeters(Location a, Location b) {
             double phi1 = Math.toRadians(a.latitude());
             double phi2 = Math.toRadians(b.latitude());
             double dPhi = Math.toRadians(b.latitude() - a.latitude());
             double dLambda = Math.toRadians(b.longitude() - a.longitude());
-
             double sinPhi = Math.sin(dPhi / 2.0);
             double sinLambda = Math.sin(dLambda / 2.0);
             double h = sinPhi * sinPhi
