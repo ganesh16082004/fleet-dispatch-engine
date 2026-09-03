@@ -65,7 +65,7 @@ public class DriverCandidateDiscoveryJmhBenchmarkFixed {
         state.moveRandomDriver();
     }
 
-    @State(Scope.Group)
+    @State(Scope.Benchmark)
     public static class BenchmarkState {
         @Param({"10000", "100000"})
         public int driverCount;
