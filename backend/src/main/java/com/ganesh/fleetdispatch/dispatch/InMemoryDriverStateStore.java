@@ -48,6 +48,16 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
     }
 
     @Override
+    public boolean reserveDriver(long driverId) {
+        return drivers.computeIfPresent(driverId, (id, current) -> {
+            if (current.status() != DriverStatus.AVAILABLE) {
+                return current;
+            }
+            return new Driver(current.id(), current.currentNode(), DriverStatus.BUSY);
+        }) != null && getDriver(driverId).orElseThrow().status() == DriverStatus.BUSY;
+    }
+
+    @Override
     public List<Driver> getAvailableDrivers() {
         List<Driver> result = new ArrayList<>();
         for (Driver driver : drivers.values()) {
