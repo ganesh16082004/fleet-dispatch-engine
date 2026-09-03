@@ -86,10 +86,25 @@ class InMemoryDriverStateStoreTest {
     }
 
     @Test
+    void shouldReleaseBusyDriverOnlyAtExpectedLocation() {
+        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        NodeId current = new NodeId(100L);
+        store.addDriver(new Driver(1L, current, DriverStatus.AVAILABLE));
+
+        assertTrue(store.reserveDriver(1L, current));
+        assertFalse(store.releaseDriver(1L, new NodeId(200L)));
+        assertEquals(DriverStatus.BUSY, store.getDriver(1L).orElseThrow().status());
+
+        assertTrue(store.releaseDriver(1L, current));
+        assertEquals(DriverStatus.AVAILABLE, store.getDriver(1L).orElseThrow().status());
+        assertFalse(store.releaseDriver(1L, current));
+    }
+
+    @Test
     void shouldAllowExactlyOneConcurrentReservation() throws Exception {
         InMemoryDriverStateStore store = new InMemoryDriverStateStore();
         NodeId node = new NodeId(100L);
-        store.addDriver(new Driver(1L, node, DriverStatus.AVAILABLE));
+        store.addDriver(new Driver(1L, node, DriverStatus.AVAILABLE);
 
         int workers = 32;
         ExecutorService executor = Executors.newFixedThreadPool(workers);
