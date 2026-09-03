@@ -144,11 +144,12 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
         int minY = cellY(location.latitude() - latitudeDelta);
         int maxY = cellY(location.latitude() + latitudeDelta);
 
-        // Haversine's h term is monotonic with distance, so we can use it
-        // directly for both radius filtering and nearest-driver ordering.
-        double maxHaversineH = haversineH(location, new Location(
-                location.latitude() + metersToLatitudeDegrees(radiusMeters),
-                location.longitude()));
+        // The Haversine function is monotonic in its h term. Comparing h values
+        // is therefore sufficient for exact radius filtering and nearest ordering
+        // while avoiding the expensive sqrt/atan2 conversion to meters.
+        double maxHaversineH = Math.pow(
+                Math.sin(radiusMeters / (2.0 * EARTH_RADIUS_METERS)),
+                2.0);
 
         List<DriverDistance> candidates = new ArrayList<>();
         for (int x = minX; x <= maxX; x++) {
