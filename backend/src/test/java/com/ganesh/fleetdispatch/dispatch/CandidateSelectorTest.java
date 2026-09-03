@@ -1,10 +1,10 @@
 package com.ganesh.fleetdispatch.dispatch;
 
+import com.ganesh.fleetdispatch.domain.Location;
 import com.ganesh.fleetdispatch.graph.NodeId;
+import com.ganesh.fleetdispatch.graph.RoadEdge;
 import com.ganesh.fleetdispatch.graph.RoadGraph;
 import com.ganesh.fleetdispatch.graph.RoadNode;
-import com.ganesh.fleetdispatch.domain.Location;
-import com.ganesh.fleetdispatch.graph.RoadEdge;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -41,11 +41,12 @@ class CandidateSelectorTest {
 
     @Test
     void shouldReturnAvailableDriversOrderedByDistance() {
-        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        RoadGraph graph = graph();
+        InMemoryDriverStateStore store = new InMemoryDriverStateStore(graph);
         store.addDriver(new Driver(10L, nearB, DriverStatus.AVAILABLE));
         store.addDriver(new Driver(11L, nearA, DriverStatus.AVAILABLE));
 
-        CandidateSelector selector = new CandidateSelector(store, graph());
+        CandidateSelector selector = new CandidateSelector(store, graph);
         List<DriverCandidate> candidates = selector.select(order(), 500.0, 10);
 
         assertEquals(2, candidates.size());
@@ -56,12 +57,13 @@ class CandidateSelectorTest {
 
     @Test
     void shouldExcludeBusyAndOfflineDrivers() {
-        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        RoadGraph graph = graph();
+        InMemoryDriverStateStore store = new InMemoryDriverStateStore(graph);
         store.addDriver(new Driver(10L, nearA, DriverStatus.BUSY));
         store.addDriver(new Driver(11L, nearB, DriverStatus.OFFLINE));
         store.addDriver(new Driver(12L, pickup, DriverStatus.AVAILABLE));
 
-        CandidateSelector selector = new CandidateSelector(store, graph());
+        CandidateSelector selector = new CandidateSelector(store, graph);
         List<DriverCandidate> candidates = selector.select(order(), 100.0, 10);
 
         assertEquals(1, candidates.size());
@@ -71,11 +73,12 @@ class CandidateSelectorTest {
 
     @Test
     void shouldRespectRadius() {
-        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        RoadGraph graph = graph();
+        InMemoryDriverStateStore store = new InMemoryDriverStateStore(graph);
         store.addDriver(new Driver(10L, nearA, DriverStatus.AVAILABLE));
         store.addDriver(new Driver(11L, far, DriverStatus.AVAILABLE));
 
-        CandidateSelector selector = new CandidateSelector(store, graph());
+        CandidateSelector selector = new CandidateSelector(store, graph);
         List<DriverCandidate> candidates = selector.select(order(), 100.0, 10);
 
         assertEquals(1, candidates.size());
@@ -84,17 +87,36 @@ class CandidateSelectorTest {
 
     @Test
     void shouldRespectMaximumCandidateCountAndUseDriverIdAsTieBreaker() {
-        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        RoadGraph graph = graph();
+        InMemoryDriverStateStore store = new InMemoryDriverStateStore(graph);
         store.addDriver(new Driver(20L, pickup, DriverStatus.AVAILABLE));
         store.addDriver(new Driver(10L, pickup, DriverStatus.AVAILABLE));
         store.addDriver(new Driver(30L, nearA, DriverStatus.AVAILABLE));
 
-        CandidateSelector selector = new CandidateSelector(store, graph());
+        CandidateSelector selector = new CandidateSelector(store, graph);
         List<DriverCandidate> candidates = selector.select(order(), 500.0, 2);
 
         assertEquals(2, candidates.size());
         assertEquals(10L, candidates.get(0).driver().id());
         assertEquals(20L, candidates.get(1).driver().id());
+    }
+
+    @Test
+    void shouldStayCorrectAfterDriverMoves() {
+        RoadGraph graph = graph();
+        InMemoryDriverStateStore store = new InMemoryDriverStateStore(graph);
+        store.addDriver(new Driver(10L, nearA, DriverStatus.AVAILABLE));
+
+        store.updateLocation(10L, far);
+
+        assertTrue(store.getAvailableDriversNear(
+                graph.node(pickup).location(), 100.0, 10).isEmpty());
+
+        store.updateLocation(10L, pickup);
+
+        List<Driver> nearby = store.getAvailableDriversNear(
+                graph.node(pickup).location(), 100.0, 10);
+        assertEquals(List.of(10L), nearby.stream().map(Driver::id).toList());
     }
 
     @Test
