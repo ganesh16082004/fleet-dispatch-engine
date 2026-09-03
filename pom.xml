@@ -15,6 +15,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.version>5.13.4</junit.version>
         <jmh.version>1.37</jmh.version>
+        <h3.version>4.5.0</h3.version>
         <maven.compiler.parameters>true</maven.compiler.parameters>
     </properties>
 
@@ -34,6 +35,11 @@
             <groupId>org.openjdk.jmh</groupId>
             <artifactId>jmh-generator-annprocess</artifactId>
             <version>${jmh.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.uber</groupId>
+            <artifactId>h3</artifactId>
+            <version>${h3.version}</version>
         </dependency>
     </dependencies>
 
