@@ -1,28 +1,47 @@
 package com.ganesh.fleetdispatch.dispatch;
 
+import com.ganesh.fleetdispatch.domain.Location;
 import com.ganesh.fleetdispatch.graph.NodeId;
+import com.ganesh.fleetdispatch.graph.RoadGraph;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class InMemoryDriverStateStore implements DriverStateStore {
+    private static final double EARTH_RADIUS_METERS = 6_371_000.0;
+    private static final double GRID_CELL_METERS = 250.0;
+
     private final ConcurrentHashMap<Long, Driver> drivers = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<GridCell, Set<Long>> availableByCell = new ConcurrentHashMap<>();
+    private final RoadGraph roadGraph;
+
+    public InMemoryDriverStateStore() {
+        this.roadGraph = null;
+    }
+
+    public InMemoryDriverStateStore(RoadGraph roadGraph) {
+        this.roadGraph = Objects.requireNonNull(roadGraph, "roadGraph");
+    }
 
     @Override
     public void addDriver(Driver driver) {
-        if (driver == null) {
-            throw new NullPointerException("driver must not be null");
-        }
+        Objects.requireNonNull(driver, "driver must not be null");
 
         Driver previous = drivers.putIfAbsent(driver.id(), driver);
         if (previous != null) {
             throw new IllegalArgumentException("Driver already exists: " + driver.id());
+        }
+
+        if (driver.status() == DriverStatus.AVAILABLE) {
+            indexAvailableDriver(driver);
         }
     }
 
@@ -33,19 +52,13 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
 
     @Override
     public void updateLocation(long driverId, NodeId newNode) {
-        if (newNode == null) {
-            throw new NullPointerException("newNode must not be null");
-        }
-
+        Objects.requireNonNull(newNode, "newNode must not be null");
         update(driverId, current -> new Driver(driverId, newNode, current.status()));
     }
 
     @Override
     public void updateStatus(long driverId, DriverStatus newStatus) {
-        if (newStatus == null) {
-            throw new NullPointerException("newStatus must not be null");
-        }
-
+        Objects.requireNonNull(newStatus, "newStatus must not be null");
         update(driverId, current -> new Driver(driverId, current.currentNode(), newStatus));
     }
 
@@ -59,6 +72,7 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
             }
 
             reserved.set(true);
+            removeFromIndex(current);
             return new Driver(current.id(), current.currentNode(), DriverStatus.BUSY);
         });
 
@@ -77,6 +91,7 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
             }
 
             reserved.set(true);
+            removeFromIndex(current);
             return new Driver(current.id(), current.currentNode(), DriverStatus.BUSY);
         });
 
@@ -95,7 +110,9 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
             }
 
             released.set(true);
-            return new Driver(current.id(), current.currentNode(), DriverStatus.AVAILABLE);
+            Driver releasedDriver = new Driver(current.id(), current.currentNode(), DriverStatus.AVAILABLE);
+            indexAvailableDriver(releasedDriver);
+            return releasedDriver;
         });
 
         return released.get();
@@ -115,6 +132,57 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
     }
 
     @Override
+    public List<Driver> getAvailableDriversNear(
+            Location location,
+            double radiusMeters,
+            int maxCandidates) {
+        Objects.requireNonNull(location, "location must not be null");
+        if (!Double.isFinite(radiusMeters) || radiusMeters < 0) {
+            throw new IllegalArgumentException("radiusMeters must be finite and non-negative");
+        }
+        if (maxCandidates <= 0) {
+            throw new IllegalArgumentException("maxCandidates must be positive");
+        }
+
+        if (roadGraph == null) {
+            return getAvailableDrivers().stream()
+                    .limit(maxCandidates)
+                    .toList();
+        }
+
+        int minX = cellX(location.longitude() - metersToLongitudeDegrees(radiusMeters, location.latitude()));
+        int maxX = cellX(location.longitude() + metersToLongitudeDegrees(radiusMeters, location.latitude()));
+        int minY = cellY(location.latitude() - metersToLatitudeDegrees(radiusMeters));
+        int maxY = cellY(location.latitude() + metersToLatitudeDegrees(radiusMeters));
+
+        List<Driver> candidates = new ArrayList<>();
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                Set<Long> ids = availableByCell.get(new GridCell(x, y));
+                if (ids == null) {
+                    continue;
+                }
+                for (Long id : ids) {
+                    Driver driver = drivers.get(id);
+                    if (driver == null || driver.status() != DriverStatus.AVAILABLE) {
+                        continue;
+                    }
+                    Location driverLocation = locationOf(driver.currentNode());
+                    if (driverLocation != null && haversineMeters(location, driverLocation) <= radiusMeters) {
+                        candidates.add(driver);
+                    }
+                }
+            }
+        }
+
+        return candidates.stream()
+                .distinct()
+                .sorted(Comparator.comparingLong(Driver::id))
+                .limit(maxCandidates)
+                .toList();
+    }
+
+    @Override
     public int size() {
         return drivers.size();
     }
@@ -124,7 +192,91 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
             if (current == null) {
                 throw new NoSuchElementException("Driver not found: " + driverId);
             }
-            return updater.apply(current);
+
+            Driver updated = updater.apply(current);
+            if (current.status() == DriverStatus.AVAILABLE) {
+                removeFromIndex(current);
+            }
+            if (updated.status() == DriverStatus.AVAILABLE) {
+                indexAvailableDriver(updated);
+            }
+            return updated;
         });
+    }
+
+    private void indexAvailableDriver(Driver driver) {
+        if (roadGraph == null) {
+            return;
+        }
+        Location location = locationOf(driver.currentNode());
+        if (location == null) {
+            return;
+        }
+        GridCell cell = cellFor(location);
+        availableByCell.computeIfAbsent(cell, ignored -> ConcurrentHashMap.newKeySet()).add(driver.id());
+    }
+
+    private void removeFromIndex(Driver driver) {
+        if (roadGraph == null) {
+            return;
+        }
+        Location location = locationOf(driver.currentNode());
+        if (location == null) {
+            return;
+        }
+        GridCell cell = cellFor(location);
+        Set<Long> ids = availableByCell.get(cell);
+        if (ids != null) {
+            ids.remove(driver.id());
+            if (ids.isEmpty()) {
+                availableByCell.remove(cell, ids);
+            }
+        }
+    }
+
+    private Location locationOf(NodeId nodeId) {
+        var node = roadGraph.node(nodeId);
+        return node == null ? null : node.location();
+    }
+
+    private static GridCell cellFor(Location location) {
+        return new GridCell(cellX(location.longitude()), cellY(location.latitude()));
+    }
+
+    private static int cellX(double longitude) {
+        return (int) Math.floor(longitude / METERS_PER_DEGREE_LONGITUDE);
+    }
+
+    private static int cellY(double latitude) {
+        return (int) Math.floor(latitude / METERS_PER_DEGREE_LATITUDE);
+    }
+
+    private static final double METERS_PER_DEGREE_LATITUDE = 111_320.0 / GRID_CELL_METERS;
+    private static final double METERS_PER_DEGREE_LONGITUDE = 111_320.0 / GRID_CELL_METERS;
+
+    private static double metersToLatitudeDegrees(double meters) {
+        return meters / 111_320.0;
+    }
+
+    private static double metersToLongitudeDegrees(double meters, double latitude) {
+        double metersPerDegree = 111_320.0 * Math.cos(Math.toRadians(latitude));
+        return meters / Math.max(metersPerDegree, 1.0);
+    }
+
+    private static double haversineMeters(Location a, Location b) {
+        double phi1 = Math.toRadians(a.latitude());
+        double phi2 = Math.toRadians(b.latitude());
+        double dPhi = Math.toRadians(b.latitude() - a.latitude());
+        double dLambda = Math.toRadians(b.longitude() - a.longitude());
+
+        double sinPhi = Math.sin(dPhi / 2.0);
+        double sinLambda = Math.sin(dLambda / 2.0);
+        double h = sinPhi * sinPhi
+                + Math.cos(phi1) * Math.cos(phi2) * sinLambda * sinLambda;
+        double c = 2.0 * Math.atan2(Math.sqrt(h), Math.sqrt(1.0 - h));
+        return EARTH_RADIUS_METERS * c;
+    }
+
+    private record GridCell(int x, int y) {
     }
 }
