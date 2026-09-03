@@ -144,6 +144,12 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
         int minY = cellY(location.latitude() - latitudeDelta);
         int maxY = cellY(location.latitude() + latitudeDelta);
 
+        // Haversine's h term is monotonic with distance, so we can use it
+        // directly for both radius filtering and nearest-driver ordering.
+        double maxHaversineH = haversineH(location, new Location(
+                location.latitude() + metersToLatitudeDegrees(radiusMeters),
+                location.longitude()));
+
         List<DriverDistance> candidates = new ArrayList<>();
         for (int x = minX; x <= maxX; x++) {
             for (int y = minY; y <= maxY; y++) {
@@ -160,9 +166,9 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
                     if (driverLocation == null) {
                         continue;
                     }
-                    double distance = haversineMeters(location, driverLocation);
-                    if (distance <= radiusMeters) {
-                        candidates.add(new DriverDistance(driver, distance));
+                    double h = haversineH(location, driverLocation);
+                    if (h <= maxHaversineH) {
+                        candidates.add(new DriverDistance(driver, h));
                     }
                 }
             }
@@ -171,7 +177,7 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
         return candidates.stream()
                 .distinct()
                 .sorted(Comparator
-                        .comparingDouble(DriverDistance::distanceMeters)
+                        .comparingDouble(DriverDistance::distanceKey)
                         .thenComparingLong(item -> item.driver().id()))
                 .limit(maxCandidates)
                 .map(DriverDistance::driver)
@@ -255,22 +261,20 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
         return meters / Math.max(METERS_PER_DEGREE * Math.cos(Math.toRadians(latitude)), 1.0);
     }
 
-    private static double haversineMeters(Location a, Location b) {
+    private static double haversineH(Location a, Location b) {
         double phi1 = Math.toRadians(a.latitude());
         double phi2 = Math.toRadians(b.latitude());
         double dPhi = Math.toRadians(b.latitude() - a.latitude());
         double dLambda = Math.toRadians(b.longitude() - a.longitude());
         double sinPhi = Math.sin(dPhi / 2.0);
         double sinLambda = Math.sin(dLambda / 2.0);
-        double h = sinPhi * sinPhi
+        return sinPhi * sinPhi
                 + Math.cos(phi1) * Math.cos(phi2) * sinLambda * sinLambda;
-        double c = 2.0 * Math.atan2(Math.sqrt(h), Math.sqrt(1.0 - h));
-        return EARTH_RADIUS_METERS * c;
     }
 
     private record GridCell(int x, int y) {
     }
 
-    private record DriverDistance(Driver driver, double distanceMeters) {
+    private record DriverDistance(Driver driver, double distanceKey) {
     }
 }
