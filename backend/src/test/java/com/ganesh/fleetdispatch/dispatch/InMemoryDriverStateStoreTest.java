@@ -3,8 +3,13 @@ package com.ganesh.fleetdispatch.dispatch;
 import com.ganesh.fleetdispatch.graph.NodeId;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -54,6 +59,68 @@ class InMemoryDriverStateStoreTest {
         Driver updated = store.getDriver(1L).orElseThrow();
         assertEquals(DriverStatus.BUSY, updated.status());
         assertEquals(new NodeId(100L), updated.currentNode());
+    }
+
+    @Test
+    void shouldReserveAvailableDriverOnlyOnce() {
+        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        NodeId node = new NodeId(100L);
+        store.addDriver(new Driver(1L, node, DriverStatus.AVAILABLE));
+
+        assertTrue(store.reserveDriver(1L));
+        assertFalse(store.reserveDriver(1L));
+        assertEquals(DriverStatus.BUSY, store.getDriver(1L).orElseThrow().status());
+    }
+
+    @Test
+    void shouldReserveOnlyWhenExpectedLocationMatches() {
+        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        NodeId current = new NodeId(100L);
+        store.addDriver(new Driver(1L, current, DriverStatus.AVAILABLE));
+
+        assertFalse(store.reserveDriver(1L, new NodeId(200L)));
+        assertEquals(DriverStatus.AVAILABLE, store.getDriver(1L).orElseThrow().status());
+
+        assertTrue(store.reserveDriver(1L, current));
+        assertEquals(DriverStatus.BUSY, store.getDriver(1L).orElseThrow().status());
+    }
+
+    @Test
+    void shouldAllowExactlyOneConcurrentReservation() throws Exception {
+        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        NodeId node = new NodeId(100L);
+        store.addDriver(new Driver(1L, node, DriverStatus.AVAILABLE));
+
+        int workers = 32;
+        ExecutorService executor = Executors.newFixedThreadPool(workers);
+        CountDownLatch ready = new CountDownLatch(workers);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Boolean> results = new ArrayList<>();
+        Object resultsLock = new Object();
+
+        for (int i = 0; i < workers; i++) {
+            executor.submit(() -> {
+                ready.countDown();
+                try {
+                    start.await();
+                    boolean result = store.reserveDriver(1L, node);
+                    synchronized (resultsLock) {
+                        results.add(result);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    fail("Worker interrupted");
+                }
+            });
+        }
+
+        assertTrue(ready.await(5, TimeUnit.SECONDS));
+        start.countDown();
+        executor.shutdown();
+        assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+
+        assertEquals(1, results.stream().filter(Boolean::booleanValue).count());
+        assertEquals(DriverStatus.BUSY, store.getDriver(1L).orElseThrow().status());
     }
 
     @Test
