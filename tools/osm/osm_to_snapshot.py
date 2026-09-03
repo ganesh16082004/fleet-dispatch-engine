@@ -192,6 +192,10 @@ def write_snapshot(
 ) -> tuple[int, int]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    edges_path = output_dir / "edges.csv"
+    if edges_path.exists():
+        edges_path.unlink()
+
     used_nodes: set[int] = set()
     edge_rows: list[tuple[int, int, float, float]] = []
     cache: OrderedDict[int, OsmNode] = OrderedDict()
@@ -244,13 +248,13 @@ def write_snapshot(
                 used_nodes.add(right)
 
                 if len(edge_rows) >= 20_000:
-                    append_edges(output_dir / "edges.csv", edge_rows)
+                    append_edges(edges_path, edge_rows)
                     edge_rows.clear()
 
             element.clear()
 
     if edge_rows:
-        append_edges(output_dir / "edges.csv", edge_rows)
+        append_edges(edges_path, edge_rows)
 
     with (output_dir / "nodes.csv").open("w", newline="", encoding="utf-8") as node_file:
         writer = csv.writer(node_file)
@@ -260,7 +264,7 @@ def write_snapshot(
             if node is not None:
                 writer.writerow((node_id, f"{node.latitude:.7f}", f"{node.longitude:.7f}"))
 
-    return len(used_nodes), count_csv_rows(output_dir / "edges.csv")
+    return len(used_nodes), count_csv_rows(edges_path)
 
 
 def append_edges(path: Path, rows: list[tuple[int, int, float, float]]) -> None:
@@ -283,11 +287,16 @@ def main() -> None:
     if not args.input.is_file():
         raise SystemExit(f"Input file does not exist: {args.input}")
 
-    with tempfile.TemporaryDirectory(prefix="fleet-osm-") as temp_dir:
-        database_path = Path(temp_dir) / "nodes.sqlite"
-        with sqlite3.connect(database_path) as database:
+    database = None
+    try:
+        with tempfile.TemporaryDirectory(prefix="fleet-osm-") as temp_dir:
+            database_path = Path(temp_dir) / "nodes.sqlite"
+            database = sqlite3.connect(database_path)
             node_count = build_node_store(args.input, database)
             snapshot_nodes, edge_count = write_snapshot(args.input, database, args.output_dir)
+    finally:
+        if database is not None:
+            database.close()
 
     print(f"OSM nodes parsed: {node_count:,}")
     print(f"Snapshot nodes:   {snapshot_nodes:,}")
