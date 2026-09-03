@@ -1,6 +1,5 @@
 package com.ganesh.fleetdispatch.dispatch;
 
-import com.ganesh.fleetdispatch.domain.Location;
 import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.graph.RoadEdge;
 import com.ganesh.fleetdispatch.graph.RoadGraph;
@@ -24,10 +23,10 @@ class DispatchEngineTest {
 
     private RoadGraph graph() {
         Map<NodeId, RoadNode> nodes = Map.of(
-                pickup, new RoadNode(pickup, new Location(12.9716, 77.5946)),
-                driverA, new RoadNode(driverA, new Location(12.9717, 77.5947)),
-                driverB, new RoadNode(driverB, new Location(12.9718, 77.5948)),
-                dropoff, new RoadNode(dropoff, new Location(12.9720, 77.5950))
+                pickup, new RoadNode(pickup, new com.ganesh.fleetdispatch.domain.Location(12.9716, 77.5946)),
+                driverA, new RoadNode(driverA, new com.ganesh.fleetdispatch.domain.Location(12.9717, 77.5947)),
+                driverB, new RoadNode(driverB, new com.ganesh.fleetdispatch.domain.Location(12.9718, 77.5948)),
+                dropoff, new RoadNode(dropoff, new com.ganesh.fleetdispatch.domain.Location(12.9720, 77.5950))
         );
 
         return new RoadGraph(nodes, List.of(
@@ -78,6 +77,35 @@ class DispatchEngineTest {
         assertEquals(DriverStatus.AVAILABLE, store.getDriver(10L).orElseThrow().status());
         assertEquals(OrderStatus.ASSIGNED, orders.getOrder(100L).orElseThrow().status());
         assertEquals(OptionalLong.of(20L), orders.getAssignedDriverId(100L));
+    }
+
+    @Test
+    void shouldAllowCustomDispatchScoringStrategy() {
+        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        InMemoryOrderStateStore orders = orderStore();
+        store.addDriver(new Driver(10L, driverA, DriverStatus.AVAILABLE));
+        store.addDriver(new Driver(20L, driverB, DriverStatus.AVAILABLE));
+
+        CandidateSelector selector = new CandidateSelector(store, graph());
+        Router router = (source, target) -> new Route(List.of(source, target),
+                source.equals(driverA) ? 5.0 : 15.0,
+                source.equals(driverA) ? 100.0 : 1.0);
+
+        DispatchCandidateScorer distanceFirstScorer = (candidate, route) -> route.totalDistanceMeters();
+        DispatchEngine engine = new DispatchEngine(
+                selector,
+                store,
+                orders,
+                router,
+                distanceFirstScorer,
+                500.0,
+                10);
+
+        Optional<DispatchAssignment> result = engine.dispatch(order());
+
+        assertTrue(result.isPresent());
+        assertEquals(20L, result.orElseThrow().driverId());
+        assertEquals(15.0, result.orElseThrow().driverToPickupRoute().totalTravelTimeSeconds());
     }
 
     @Test
