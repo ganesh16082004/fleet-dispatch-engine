@@ -2,6 +2,7 @@ package com.ganesh.fleetdispatch.graph;
 
 import static org.junit.jupiter.api.Assertions.assertSame;
 
+import com.ganesh.fleetdispatch.domain.Location;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
