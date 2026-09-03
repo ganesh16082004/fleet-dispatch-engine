@@ -1,8 +1,7 @@
 package com.ganesh.fleetdispatch.dispatch;
 
-import com.ganesh.fleetdispatch.graph.NodeId;
-import com.ganesh.fleetdispatch.graph.RoadGraph;
 import com.ganesh.fleetdispatch.domain.Location;
+import com.ganesh.fleetdispatch.graph.RoadGraph;
 import com.ganesh.fleetdispatch.graph.RoadNode;
 
 import java.util.Comparator;
@@ -38,7 +37,7 @@ public final class CandidateSelector {
 
         Location pickup = pickupNode.location();
 
-        return driverStateStore.getAvailableDrivers().stream()
+        return driverStateStore.getAvailableDriversNear(pickup, radiusMeters, maxCandidates).stream()
                 .map(driver -> {
                     RoadNode driverNode = roadGraph.node(driver.currentNode());
                     if (driverNode == null) {
