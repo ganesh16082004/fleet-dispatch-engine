@@ -28,13 +28,23 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
     private final ConcurrentHashMap<Long, Driver> drivers = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<GridCell, Set<Long>> availableByCell = new ConcurrentHashMap<>();
     private final RoadGraph roadGraph;
+    private final H3AvailableDriverIndex h3Index;
 
     public InMemoryDriverStateStore() {
         this.roadGraph = null;
+        this.h3Index = null;
     }
 
     public InMemoryDriverStateStore(RoadGraph roadGraph) {
+        this(roadGraph, SpatialIndexType.GRID);
+    }
+
+    public InMemoryDriverStateStore(RoadGraph roadGraph, SpatialIndexType spatialIndexType) {
         this.roadGraph = Objects.requireNonNull(roadGraph, "roadGraph");
+        Objects.requireNonNull(spatialIndexType, "spatialIndexType");
+        this.h3Index = spatialIndexType == SpatialIndexType.H3
+                ? new H3AvailableDriverIndex(roadGraph)
+                : null;
     }
 
     @Override
@@ -142,6 +152,13 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
             return getAvailableDrivers();
         }
 
+        if (h3Index != null) {
+            Comparator<H3AvailableDriverIndex.DriverDistance> ordering = Comparator
+                    .comparingDouble(H3AvailableDriverIndex.DriverDistance::distanceKey)
+                    .thenComparingLong(item -> item.driver().id());
+            return h3Index.query(location, radiusMeters, maxCandidates, drivers::get, ordering);
+        }
+
         double latitudeDelta = metersToLatitudeDegrees(radiusMeters);
         double longitudeDelta = metersToLongitudeDegrees(radiusMeters, location.latitude());
         int minX = cellX(location.longitude() - longitudeDelta);
@@ -149,15 +166,10 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
         int minY = cellY(location.latitude() - latitudeDelta);
         int maxY = cellY(location.latitude() + latitudeDelta);
 
-        // The Haversine function is monotonic in its h term. Comparing h values
-        // is therefore sufficient for exact radius filtering and nearest ordering
-        // while avoiding the expensive sqrt/atan2 conversion to meters.
         double maxHaversineH = Math.pow(
                 Math.sin(radiusMeters / (2.0 * EARTH_RADIUS_METERS)),
                 2.0);
 
-        // Keep only the best K candidates while scanning the spatial index.
-        // The queue head is the current worst candidate among the retained K.
         PriorityQueue<DriverDistance> topK = new PriorityQueue<>(
                 Math.max(1, maxCandidates),
                 BEST_FIRST.reversed());
@@ -225,6 +237,10 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
         if (roadGraph == null) {
             return;
         }
+        if (h3Index != null) {
+            h3Index.add(driver);
+            return;
+        }
         Location location = locationOf(driver.currentNode());
         if (location == null) {
             return;
@@ -236,6 +252,10 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
 
     private void removeFromIndex(Driver driver) {
         if (roadGraph == null) {
+            return;
+        }
+        if (h3Index != null) {
+            h3Index.remove(driver);
             return;
         }
         Location location = locationOf(driver.currentNode());
