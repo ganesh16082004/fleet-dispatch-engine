@@ -40,6 +40,11 @@ public final class AStarRouter implements Router {
 
     @Override
     public Route findRoute(NodeId source, NodeId target) {
+        return findRoute(source, target, null);
+    }
+
+    /** Finds a route while optionally recording per-query algorithm metrics. */
+    public Route findRoute(NodeId source, NodeId target, RoutingMetrics metrics) {
         requireNode(source, "source");
         requireNode(target, "target");
 
@@ -65,6 +70,9 @@ public final class AStarRouter implements Router {
             if (!settled.add(current.node())) {
                 continue;
             }
+            if (metrics != null) {
+                metrics.recordNodeExpanded();
+            }
             if (current.node().equals(target)) {
                 break;
             }
@@ -82,6 +90,9 @@ public final class AStarRouter implements Router {
                     previousEdge.put(edge.to(), edge);
                     double fScore = candidateG + heuristicSeconds(edge.to(), target);
                     queue.add(new NodeScore(edge.to(), candidateG, fScore));
+                    if (metrics != null) {
+                        metrics.recordEdgeRelaxed();
+                    }
                 }
             }
         }
