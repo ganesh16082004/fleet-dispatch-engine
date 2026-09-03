@@ -52,6 +52,20 @@ public class DriverCandidateDiscoveryJmhBenchmarkFixed {
     }
 
     @Benchmark
+    @Group("readOnlyGrid")
+    @GroupThreads(8)
+    public List<Driver> concurrentReadOnlyGridLookup(BenchmarkState state) {
+        return state.gridQuery();
+    }
+
+    @Benchmark
+    @Group("updateOnly")
+    @GroupThreads(1)
+    public void updateOnly(BenchmarkState state) {
+        state.moveRandomDriver();
+    }
+
+    @Benchmark
     @Group("mixedGrid")
     @GroupThreads(7)
     public List<Driver> concurrentGridLookup(BenchmarkState state) {
