@@ -15,6 +15,7 @@ public final class DispatchEngine {
     private final DriverStateStore driverStateStore;
     private final OrderStateStore orderStateStore;
     private final Router router;
+    private final DispatchCandidateScorer candidateScorer;
     private final double searchRadiusMeters;
     private final int maxCandidates;
 
@@ -25,10 +26,29 @@ public final class DispatchEngine {
             Router router,
             double searchRadiusMeters,
             int maxCandidates) {
+        this(
+                candidateSelector,
+                driverStateStore,
+                orderStateStore,
+                router,
+                new TravelTimeDispatchCandidateScorer(),
+                searchRadiusMeters,
+                maxCandidates);
+    }
+
+    public DispatchEngine(
+            CandidateSelector candidateSelector,
+            DriverStateStore driverStateStore,
+            OrderStateStore orderStateStore,
+            Router router,
+            DispatchCandidateScorer candidateScorer,
+            double searchRadiusMeters,
+            int maxCandidates) {
         this.candidateSelector = Objects.requireNonNull(candidateSelector, "candidateSelector");
         this.driverStateStore = Objects.requireNonNull(driverStateStore, "driverStateStore");
         this.orderStateStore = Objects.requireNonNull(orderStateStore, "orderStateStore");
         this.router = Objects.requireNonNull(router, "router");
+        this.candidateScorer = Objects.requireNonNull(candidateScorer, "candidateScorer");
 
         if (!Double.isFinite(searchRadiusMeters) || searchRadiusMeters < 0) {
             throw new IllegalArgumentException("searchRadiusMeters must be finite and non-negative");
@@ -59,7 +79,8 @@ public final class DispatchEngine {
                 .map(candidate -> routeCandidate(candidate, order))
                 .flatMap(Optional::stream)
                 .sorted(Comparator
-                        .comparingDouble((RoutedCandidate candidate) -> candidate.route().totalTravelTimeSeconds())
+                        .comparingDouble((RoutedCandidate candidate) ->
+                                candidateScorer.score(candidate.candidate(), candidate.route()))
                         .thenComparingDouble(candidate -> candidate.route().totalDistanceMeters())
                         .thenComparingLong(candidate -> candidate.candidate().driver().id()))
                 .toList();
