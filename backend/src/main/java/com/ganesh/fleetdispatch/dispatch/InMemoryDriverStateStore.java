@@ -6,7 +6,6 @@ import com.ganesh.fleetdispatch.graph.RoadGraph;
 
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
@@ -18,6 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class InMemoryDriverStateStore implements DriverStateStore {
     private static final double EARTH_RADIUS_METERS = 6_371_000.0;
     private static final double GRID_CELL_METERS = 250.0;
+    private static final double METERS_PER_DEGREE_LATITUDE = 111_320.0;
 
     private final ConcurrentHashMap<Long, Driver> drivers = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<GridCell, Set<Long>> availableByCell = new ConcurrentHashMap<>();
@@ -34,12 +34,10 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
     @Override
     public void addDriver(Driver driver) {
         Objects.requireNonNull(driver, "driver must not be null");
-
         Driver previous = drivers.putIfAbsent(driver.id(), driver);
         if (previous != null) {
             throw new IllegalArgumentException("Driver already exists: " + driver.id());
         }
-
         if (driver.status() == DriverStatus.AVAILABLE) {
             indexAvailableDriver(driver);
         }
@@ -65,17 +63,14 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
     @Override
     public boolean reserveDriver(long driverId) {
         AtomicBoolean reserved = new AtomicBoolean(false);
-
         drivers.computeIfPresent(driverId, (id, current) -> {
             if (current.status() != DriverStatus.AVAILABLE) {
                 return current;
             }
-
             reserved.set(true);
             removeFromIndex(current);
             return new Driver(current.id(), current.currentNode(), DriverStatus.BUSY);
         });
-
         return reserved.get();
     }
 
@@ -83,18 +78,15 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
     public boolean reserveDriver(long driverId, NodeId expectedNode) {
         Objects.requireNonNull(expectedNode, "expectedNode must not be null");
         AtomicBoolean reserved = new AtomicBoolean(false);
-
         drivers.computeIfPresent(driverId, (id, current) -> {
             if (current.status() != DriverStatus.AVAILABLE
                     || !current.currentNode().equals(expectedNode)) {
                 return current;
             }
-
             reserved.set(true);
             removeFromIndex(current);
             return new Driver(current.id(), current.currentNode(), DriverStatus.BUSY);
         });
-
         return reserved.get();
     }
 
@@ -102,19 +94,16 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
     public boolean releaseDriver(long driverId, NodeId expectedNode) {
         Objects.requireNonNull(expectedNode, "expectedNode must not be null");
         AtomicBoolean released = new AtomicBoolean(false);
-
         drivers.computeIfPresent(driverId, (id, current) -> {
             if (current.status() != DriverStatus.BUSY
                     || !current.currentNode().equals(expectedNode)) {
                 return current;
             }
-
             released.set(true);
             Driver releasedDriver = new Driver(current.id(), current.currentNode(), DriverStatus.AVAILABLE);
             indexAvailableDriver(releasedDriver);
             return releasedDriver;
         });
-
         return released.get();
     }
 
@@ -126,7 +115,6 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
                 result.add(driver);
             }
         }
-
         result.sort(Comparator.comparingLong(Driver::id));
         return List.copyOf(result);
     }
@@ -145,15 +133,15 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
         }
 
         if (roadGraph == null) {
-            return getAvailableDrivers().stream()
-                    .limit(maxCandidates)
-                    .toList();
+            return getAvailableDrivers();
         }
 
-        int minX = cellX(location.longitude() - metersToLongitudeDegrees(radiusMeters, location.latitude()));
-        int maxX = cellX(location.longitude() + metersToLongitudeDegrees(radiusMeters, location.latitude()));
-        int minY = cellY(location.latitude() - metersToLatitudeDegrees(radiusMeters));
-        int maxY = cellY(location.latitude() + metersToLatitudeDegrees(radiusMeters));
+        double longitudeDelta = metersToLongitudeDegrees(radiusMeters, location.latitude());
+        double latitudeDelta = metersToLatitudeDegrees(radiusMeters);
+        int minX = cellX(location.longitude() - longitudeDelta, location.latitude());
+        int maxX = cellX(location.longitude() + longitudeDelta, location.latitude());
+        int minY = cellY(location.latitude() - latitudeDelta);
+        int maxY = cellY(location.latitude() + latitudeDelta);
 
         List<Driver> candidates = new ArrayList<>();
         for (int x = minX; x <= maxX; x++) {
@@ -192,7 +180,6 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
             if (current == null) {
                 throw new NoSuchElementException("Driver not found: " + driverId);
             }
-
             Driver updated = updater.apply(current);
             if (current.status() == DriverStatus.AVAILABLE) {
                 removeFromIndex(current);
@@ -212,8 +199,9 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
         if (location == null) {
             return;
         }
-        GridCell cell = cellFor(location);
-        availableByCell.computeIfAbsent(cell, ignored -> ConcurrentHashMap.newKeySet()).add(driver.id());
+        availableByCell
+                .computeIfAbsent(cellFor(location), ignored -> ConcurrentHashMap.newKeySet())
+                .add(driver.id());
     }
 
     private void removeFromIndex(Driver driver) {
@@ -240,27 +228,29 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
     }
 
     private static GridCell cellFor(Location location) {
-        return new GridCell(cellX(location.longitude()), cellY(location.latitude()));
+        return new GridCell(
+                cellX(location.longitude(), location.latitude()),
+                cellY(location.latitude()));
     }
 
-    private static int cellX(double longitude) {
-        return (int) Math.floor(longitude / METERS_PER_DEGREE_LONGITUDE);
+    private static int cellX(double longitude, double latitude) {
+        return (int) Math.floor(longitude / metersPerDegreeLongitude(latitude) * METERS_PER_DEGREE_LATITUDE / GRID_CELL_METERS);
     }
 
     private static int cellY(double latitude) {
-        return (int) Math.floor(latitude / METERS_PER_DEGREE_LATITUDE);
+        return (int) Math.floor(latitude / (GRID_CELL_METERS / METERS_PER_DEGREE_LATITUDE));
     }
 
-    private static final double METERS_PER_DEGREE_LATITUDE = 111_320.0 / GRID_CELL_METERS;
-    private static final double METERS_PER_DEGREE_LONGITUDE = 111_320.0 / GRID_CELL_METERS;
+    private static double metersPerDegreeLongitude(double latitude) {
+        return METERS_PER_DEGREE_LATITUDE * Math.cos(Math.toRadians(latitude));
+    }
 
     private static double metersToLatitudeDegrees(double meters) {
-        return meters / 111_320.0;
+        return meters / METERS_PER_DEGREE_LATITUDE;
     }
 
     private static double metersToLongitudeDegrees(double meters, double latitude) {
-        double metersPerDegree = 111_320.0 * Math.cos(Math.toRadians(latitude));
-        return meters / Math.max(metersPerDegree, 1.0);
+        return meters / Math.max(metersPerDegreeLongitude(latitude), 1.0);
     }
 
     private static double haversineMeters(Location a, Location b) {
@@ -268,7 +258,6 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
         double phi2 = Math.toRadians(b.latitude());
         double dPhi = Math.toRadians(b.latitude() - a.latitude());
         double dLambda = Math.toRadians(b.longitude() - a.longitude());
-
         double sinPhi = Math.sin(dPhi / 2.0);
         double sinLambda = Math.sin(dLambda / 2.0);
         double h = sinPhi * sinPhi
