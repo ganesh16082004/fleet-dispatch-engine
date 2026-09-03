@@ -1,6 +1,7 @@
 package com.ganesh.fleetdispatch.dispatch;
 
 import com.ganesh.fleetdispatch.graph.Route;
+import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.routing.Router;
 
 import java.util.Comparator;
@@ -8,16 +9,11 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
-/**
- * Converts nearby-driver candidates into an actual dispatch decision.
- *
- * <p>Candidate discovery is deliberately separated from dispatch so the
- * search radius and candidate bound can evolve independently from the
- * assignment policy.</p>
- */
+/** Converts nearby-driver candidates into an actual dispatch decision. */
 public final class DispatchEngine {
     private final CandidateSelector candidateSelector;
     private final DriverStateStore driverStateStore;
+    private final OrderStateStore orderStateStore;
     private final Router router;
     private final double searchRadiusMeters;
     private final int maxCandidates;
@@ -25,11 +21,13 @@ public final class DispatchEngine {
     public DispatchEngine(
             CandidateSelector candidateSelector,
             DriverStateStore driverStateStore,
+            OrderStateStore orderStateStore,
             Router router,
             double searchRadiusMeters,
             int maxCandidates) {
         this.candidateSelector = Objects.requireNonNull(candidateSelector, "candidateSelector");
         this.driverStateStore = Objects.requireNonNull(driverStateStore, "driverStateStore");
+        this.orderStateStore = Objects.requireNonNull(orderStateStore, "orderStateStore");
         this.router = Objects.requireNonNull(router, "router");
 
         if (!Double.isFinite(searchRadiusMeters) || searchRadiusMeters < 0) {
@@ -43,18 +41,16 @@ public final class DispatchEngine {
         this.maxCandidates = maxCandidates;
     }
 
-    /**
-     * Attempts to assign an order to an available driver.
-     *
-     * <p>Candidates are first ranked by actual road travel time to the pickup
-     * node, then by route distance and driver id for deterministic tie-breaking.
-     * Reservation is conditional on the driver's node remaining unchanged so a
-     * stale routing result cannot claim a driver who moved concurrently.</p>
-     */
+    /** Attempts to assign an order to an available driver. */
     public Optional<DispatchAssignment> dispatch(Order order) {
         Objects.requireNonNull(order, "order");
         if (order.status() != OrderStatus.CREATED) {
             throw new IllegalArgumentException("Only CREATED orders can be dispatched: " + order.id());
+        }
+
+        Optional<Order> currentOrder = orderStateStore.getOrder(order.id());
+        if (currentOrder.isEmpty() || currentOrder.get().status() != OrderStatus.CREATED) {
+            return Optional.empty();
         }
 
         List<RoutedCandidate> routedCandidates = candidateSelector
@@ -71,15 +67,21 @@ public final class DispatchEngine {
         for (RoutedCandidate candidate : routedCandidates) {
             DriverCandidate driverCandidate = candidate.candidate();
             Driver driver = driverCandidate.driver();
+            long driverId = driver.id();
+            NodeId expectedNode = driver.currentNode();
 
-            if (!driverStateStore.reserveDriver(driver.id(), driver.currentNode())) {
+            if (!driverStateStore.reserveDriver(driverId, expectedNode)) {
                 continue;
             }
 
-            return Optional.of(new DispatchAssignment(
-                    order.id(),
-                    driver.id(),
-                    candidate.route()));
+            if (orderStateStore.tryAssign(order.id(), driverId)) {
+                return Optional.of(new DispatchAssignment(
+                        order.id(),
+                        driverId,
+                        candidate.route()));
+            }
+
+            driverStateStore.releaseDriver(driverId, expectedNode);
         }
 
         return Optional.empty();
