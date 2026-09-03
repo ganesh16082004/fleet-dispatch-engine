@@ -15,14 +15,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.function.Supplier;
 
-/**
- * Simple reproducible benchmark for driver candidate discovery.
- *
- * <p>Run with assertions enabled using:
- * {@code java -ea ...DriverCandidateDiscoveryBenchmark}.
- * This is intentionally dependency-free; JMH can be introduced later when we
- * start doing JVM-level performance tuning.</p>
- */
+/** Reproducible benchmark for full-scan versus grid-backed driver discovery. */
 public final class DriverCandidateDiscoveryBenchmark {
     private static final double RADIUS_METERS = 1_000.0;
     private static final int MAX_CANDIDATES = 20;
@@ -35,17 +28,15 @@ public final class DriverCandidateDiscoveryBenchmark {
     public static void main(String[] args) {
         for (int driverCount : new int[]{10_000, 100_000}) {
             BenchmarkFixture fixture = buildFixture(driverCount, 42L);
-            benchmark("full-scan", fixture, fixture::fullScan);
-            benchmark("grid-index", fixture, fixture::gridQuery);
+            System.out.println("drivers=" + driverCount);
+            benchmark("full-scan", fixture::fullScan);
+            benchmark("grid-index", fixture::gridQuery);
             verifyEquivalentResults(fixture);
             System.out.println();
         }
     }
 
-    private static void benchmark(
-            String name,
-            BenchmarkFixture fixture,
-            Supplier<List<Driver>> operation) {
+    private static void benchmark(String name, Supplier<List<Driver>> operation) {
         for (int i = 0; i < WARMUP_ITERATIONS; i++) {
             consume(operation.get());
         }
@@ -70,15 +61,12 @@ public final class DriverCandidateDiscoveryBenchmark {
     }
 
     private static void verifyEquivalentResults(BenchmarkFixture fixture) {
-        List<Driver> expected = fixture.fullScan();
-        List<Driver> actual = fixture.gridQuery();
-
-        if (!expected.stream().map(Driver::id).toList()
-                .equals(actual.stream().map(Driver::id).toList())) {
+        List<Long> expectedIds = fixture.fullScan().stream().map(Driver::id).toList();
+        List<Long> actualIds = fixture.gridQuery().stream().map(Driver::id).toList();
+        if (!expectedIds.equals(actualIds)) {
             throw new AssertionError("Grid query returned a different candidate set from full scan");
         }
-
-        System.out.printf("correctness: %d candidate(s), identical result set%n", actual.size());
+        System.out.printf("correctness: %d candidate(s), identical result set%n", actualIds.size());
     }
 
     private static void consume(List<Driver> drivers) {
@@ -93,7 +81,8 @@ public final class DriverCandidateDiscoveryBenchmark {
         Random random = new Random(seed);
         Map<NodeId, RoadNode> nodes = new java.util.HashMap<>(driverCount + 1);
         NodeId queryNodeId = new NodeId(0L);
-        nodes.put(queryNodeId, new RoadNode(queryNodeId, new Location(12.9716, 77.5946)));
+        Location queryLocation = new Location(12.9716, 77.5946);
+        nodes.put(queryNodeId, new RoadNode(queryNodeId, queryLocation));
 
         List<Driver> drivers = new ArrayList<>(driverCount);
         for (int i = 1; i <= driverCount; i++) {
@@ -110,12 +99,12 @@ public final class DriverCandidateDiscoveryBenchmark {
             store.addDriver(driver);
         }
 
-        Location query = nodes.get(queryNodeId).location();
-        return new BenchmarkFixture(store, query, drivers);
+        return new BenchmarkFixture(store, graph, queryLocation, drivers);
     }
 
     private record BenchmarkFixture(
             InMemoryDriverStateStore store,
+            RoadGraph graph,
             Location query,
             List<Driver> allDrivers) {
 
@@ -125,8 +114,11 @@ public final class DriverCandidateDiscoveryBenchmark {
                 if (driver.status() != DriverStatus.AVAILABLE) {
                     continue;
                 }
-                Location driverLocation = storeLocation(driver);
-                double distance = haversineMeters(query, driverLocation);
+                RoadNode node = graph.node(driver.currentNode());
+                if (node == null) {
+                    continue;
+                }
+                double distance = haversineMeters(query, node.location());
                 if (distance <= RADIUS_METERS) {
                     candidates.add(new DriverDistance(driver, distance));
                 }
@@ -143,12 +135,6 @@ public final class DriverCandidateDiscoveryBenchmark {
 
         List<Driver> gridQuery() {
             return store.getAvailableDriversNear(query, RADIUS_METERS, MAX_CANDIDATES);
-        }
-
-        private Location storeLocation(Driver driver) {
-            return store
-                    .getLocation(driver.currentNode())
-                    .orElseThrow(() -> new IllegalStateException("Missing node: " + driver.currentNode()));
         }
     }
 
