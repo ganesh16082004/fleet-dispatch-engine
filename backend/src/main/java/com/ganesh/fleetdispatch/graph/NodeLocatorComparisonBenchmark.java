@@ -48,33 +48,36 @@ public final class NodeLocatorComparisonBenchmark {
 
         verifyAgreement(bruteForce, kdTree);
 
-        long bruteNanos = measure(bruteForce);
-        long kdNanos = measure(kdTree);
+        TimingStats bruteStats = measure(bruteForce);
+        TimingStats kdStats = measure(kdTree);
 
-        double bruteAverageMs = averageMillis(bruteNanos);
-        double kdAverageMs = averageMillis(kdNanos);
-        double speedup = kdAverageMs == 0.0 ? Double.POSITIVE_INFINITY : bruteAverageMs / kdAverageMs;
+        double speedup = kdStats.averageMillis() == 0.0
+                ? Double.POSITIVE_INFINITY
+                : bruteStats.averageMillis() / kdStats.averageMillis();
 
         System.out.println("=== Node Locator Comparison Benchmark ===");
         System.out.println();
         System.out.printf("Graph nodes:        %,d%n", graph.nodeCount());
         System.out.printf("Graph edges:        %,d%n", graph.edgeCount());
         System.out.printf("Queries:            %d%n", QUERIES.size());
+        System.out.printf("Measured lookups:   %d%n", bruteStats.lookupCount());
         System.out.println();
         System.out.println("KD-tree index");
         System.out.printf("  Build time:       %.3f s%n", buildNanos / 1_000_000_000.0);
         System.out.println();
         System.out.println("Lookup timing");
-        System.out.printf("  Brute force avg:  %.3f ms%n", bruteAverageMs);
-        System.out.printf("  Brute force min:  %.3f ms%n", nanosToMillis(minPerLookup(bruteNanos)));
-        System.out.printf("  Brute force max:  %.3f ms%n", nanosToMillis(maxPerLookup(bruteNanos)));
-        System.out.printf("  KD-tree avg:      %.3f ms%n", kdAverageMs);
-        System.out.printf("  KD-tree min:      %.3f ms%n", nanosToMillis(minPerLookup(kdNanos)));
-        System.out.printf("  KD-tree max:      %.3f ms%n", nanosToMillis(maxPerLookup(kdNanos)));
+        printStats("Brute force", bruteStats);
+        printStats("KD-tree", kdStats);
         System.out.printf("  Lookup speedup:   %.2fx%n", speedup);
         System.out.println();
         System.out.println("Correctness");
         System.out.println("  Agreement:        PASS");
+    }
+
+    private static void printStats(String name, TimingStats stats) {
+        System.out.printf("  %-18s avg: %.3f ms%n", name, stats.averageMillis());
+        System.out.printf("  %-18s min: %.3f ms%n", "", stats.minMillis());
+        System.out.printf("  %-18s max: %.3f ms%n", "", stats.maxMillis());
     }
 
     private static void verifyAgreement(NodeLocator baseline, NodeLocator optimized) {
@@ -88,18 +91,30 @@ public final class NodeLocatorComparisonBenchmark {
         }
     }
 
-    private static long measure(NodeLocator locator) {
+    private static TimingStats measure(NodeLocator locator) {
         for (int round = 0; round < WARMUP_ROUNDS; round++) {
             runQueries(locator);
         }
 
         long totalNanos = 0L;
+        long minNanos = Long.MAX_VALUE;
+        long maxNanos = Long.MIN_VALUE;
+        int lookupCount = 0;
+
         for (int round = 0; round < MEASURED_ROUNDS; round++) {
-            long start = System.nanoTime();
-            runQueries(locator);
-            totalNanos += System.nanoTime() - start;
+            for (Location query : QUERIES) {
+                long start = System.nanoTime();
+                locator.findNearest(query);
+                long elapsed = System.nanoTime() - start;
+
+                totalNanos += elapsed;
+                minNanos = Math.min(minNanos, elapsed);
+                maxNanos = Math.max(maxNanos, elapsed);
+                lookupCount++;
+            }
         }
-        return totalNanos;
+
+        return new TimingStats(totalNanos, minNanos, maxNanos, lookupCount);
     }
 
     private static void runQueries(NodeLocator locator) {
@@ -108,27 +123,17 @@ public final class NodeLocatorComparisonBenchmark {
         }
     }
 
-    private static double averageMillis(long totalNanos) {
-        long lookups = (long) MEASURED_ROUNDS * QUERIES.size();
-        return totalNanos / (double) lookups / 1_000_000.0;
-    }
+    private record TimingStats(long totalNanos, long minNanos, long maxNanos, int lookupCount) {
+        double averageMillis() {
+            return totalNanos / (double) lookupCount / 1_000_000.0;
+        }
 
-    private static long minPerLookup(long totalNanos) {
-        // Individual timings are collected separately below to keep the hot-path
-        // measurement simple and avoid allocating timing objects per lookup.
-        // Use the total only for the display fallback; exact per-lookup min/max
-        // are measured by a dedicated pass.
-        return dedicatedMinNanos;
-    }
+        double minMillis() {
+            return minNanos / 1_000_000.0;
+        }
 
-    private static long maxPerLookup(long totalNanos) {
-        return dedicatedMaxNanos;
-    }
-
-    private static long dedicatedMinNanos;
-    private static long dedicatedMaxNanos;
-
-    private static double nanosToMillis(long nanos) {
-        return nanos / 1_000_000.0;
+        double maxMillis() {
+            return maxNanos / 1_000_000.0;
+        }
     }
 }
