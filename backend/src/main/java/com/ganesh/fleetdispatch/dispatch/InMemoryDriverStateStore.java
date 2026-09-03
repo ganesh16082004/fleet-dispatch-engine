@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class InMemoryDriverStateStore implements DriverStateStore {
     private final ConcurrentHashMap<Long, Driver> drivers = new ConcurrentHashMap<>();
@@ -49,12 +50,18 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
 
     @Override
     public boolean reserveDriver(long driverId) {
-        return drivers.computeIfPresent(driverId, (id, current) -> {
+        AtomicBoolean reserved = new AtomicBoolean(false);
+
+        drivers.computeIfPresent(driverId, (id, current) -> {
             if (current.status() != DriverStatus.AVAILABLE) {
                 return current;
             }
+
+            reserved.set(true);
             return new Driver(current.id(), current.currentNode(), DriverStatus.BUSY);
-        }) != null && getDriver(driverId).orElseThrow().status() == DriverStatus.BUSY;
+        });
+
+        return reserved.get();
     }
 
     @Override
