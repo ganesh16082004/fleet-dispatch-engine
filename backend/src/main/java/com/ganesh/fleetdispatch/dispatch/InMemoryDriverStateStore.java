@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -19,6 +20,10 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
     private static final double GRID_CELL_METERS = 250.0;
     private static final double METERS_PER_DEGREE = 111_320.0;
     private static final double CELL_DEGREES = GRID_CELL_METERS / METERS_PER_DEGREE;
+
+    private static final Comparator<DriverDistance> BEST_FIRST = Comparator
+            .comparingDouble(DriverDistance::distanceKey)
+            .thenComparingLong(item -> item.driver().id());
 
     private final ConcurrentHashMap<Long, Driver> drivers = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<GridCell, Set<Long>> availableByCell = new ConcurrentHashMap<>();
@@ -151,7 +156,12 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
                 Math.sin(radiusMeters / (2.0 * EARTH_RADIUS_METERS)),
                 2.0);
 
-        List<DriverDistance> candidates = new ArrayList<>();
+        // Keep only the best K candidates while scanning the spatial index.
+        // The queue head is the current worst candidate among the retained K.
+        PriorityQueue<DriverDistance> topK = new PriorityQueue<>(
+                Math.max(1, maxCandidates),
+                BEST_FIRST.reversed());
+
         for (int x = minX; x <= maxX; x++) {
             for (int y = minY; y <= maxY; y++) {
                 Set<Long> ids = availableByCell.get(new GridCell(x, y));
@@ -168,19 +178,24 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
                         continue;
                     }
                     double h = haversineH(location, driverLocation);
-                    if (h <= maxHaversineH) {
-                        candidates.add(new DriverDistance(driver, h));
+                    if (h > maxHaversineH) {
+                        continue;
+                    }
+
+                    DriverDistance candidate = new DriverDistance(driver, h);
+                    if (topK.size() < maxCandidates) {
+                        topK.offer(candidate);
+                    } else if (BEST_FIRST.compare(candidate, topK.peek()) < 0) {
+                        topK.poll();
+                        topK.offer(candidate);
                     }
                 }
             }
         }
 
-        return candidates.stream()
-                .distinct()
-                .sorted(Comparator
-                        .comparingDouble(DriverDistance::distanceKey)
-                        .thenComparingLong(item -> item.driver().id()))
-                .limit(maxCandidates)
+        List<DriverDistance> result = new ArrayList<>(topK);
+        result.sort(BEST_FIRST);
+        return result.stream()
                 .map(DriverDistance::driver)
                 .toList();
     }
