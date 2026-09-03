@@ -84,6 +84,24 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
     }
 
     @Override
+    public boolean releaseDriver(long driverId, NodeId expectedNode) {
+        Objects.requireNonNull(expectedNode, "expectedNode must not be null");
+        AtomicBoolean released = new AtomicBoolean(false);
+
+        drivers.computeIfPresent(driverId, (id, current) -> {
+            if (current.status() != DriverStatus.BUSY
+                    || !current.currentNode().equals(expectedNode)) {
+                return current;
+            }
+
+            released.set(true);
+            return new Driver(current.id(), current.currentNode(), DriverStatus.AVAILABLE);
+        });
+
+        return released.get();
+    }
+
+    @Override
     public List<Driver> getAvailableDrivers() {
         List<Driver> result = new ArrayList<>();
         for (Driver driver : drivers.values()) {
