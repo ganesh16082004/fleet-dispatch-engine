@@ -91,18 +91,23 @@ class DispatchEngineTest {
         Router router = (source, target) -> new Route(List.of(source, target), 10.0, 10.0);
         DispatchEngine engine = new DispatchEngine(selector, store, router, 500.0, 10);
 
-        Order delivered = new Order(101L, pickup, dropoff, 1_000L, OrderStatus.DELIVERED);
+        Order completed = new Order(101L, pickup, dropoff, 1_000L, OrderStatus.COMPLETED);
 
-        assertThrows(IllegalArgumentException.class, () -> engine.dispatch(delivered));
+        assertThrows(IllegalArgumentException.class, () -> engine.dispatch(completed));
     }
 
     @Test
-    void shouldNotClaimDriverWhoseLocationChangedAfterCandidateDiscovery() {
+    void shouldUseCurrentDriverLocationDuringDispatch() {
         InMemoryDriverStateStore store = new InMemoryDriverStateStore();
         store.addDriver(new Driver(10L, driverA, DriverStatus.AVAILABLE));
 
         CandidateSelector selector = new CandidateSelector(store, graph());
-        Router router = (source, target) -> new Route(List.of(source, target), 10.0, 10.0);
+        Router router = (source, target) -> {
+            if (source.equals(driverB) && target.equals(pickup)) {
+                return new Route(List.of(driverB, pickup), 7.0, 20.0);
+            }
+            throw new IllegalArgumentException("Unexpected route: " + source + " -> " + target);
+        };
         DispatchEngine engine = new DispatchEngine(selector, store, router, 500.0, 10);
 
         store.updateLocation(10L, driverB);
@@ -111,7 +116,8 @@ class DispatchEngineTest {
 
         assertTrue(result.isPresent());
         assertEquals(10L, result.orElseThrow().driverId());
-        assertEquals(DriverStatus.BUSY, store.getDriver(10L).orElseThrow().status());
         assertEquals(driverB, store.getDriver(10L).orElseThrow().currentNode());
+        assertEquals(DriverStatus.BUSY, store.getDriver(10L).orElseThrow().status());
+        assertEquals(7.0, result.orElseThrow().driverToPickupRoute().totalTravelTimeSeconds());
     }
 }
