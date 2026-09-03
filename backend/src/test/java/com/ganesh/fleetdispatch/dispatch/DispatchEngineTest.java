@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -42,9 +43,16 @@ class DispatchEngineTest {
         return new Order(100L, pickup, dropoff, 1_000L, OrderStatus.CREATED);
     }
 
+    private InMemoryOrderStateStore orderStore() {
+        InMemoryOrderStateStore store = new InMemoryOrderStateStore();
+        store.addOrder(order());
+        return store;
+    }
+
     @Test
     void shouldAssignDriverUsingRoadTravelTime() {
         InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        InMemoryOrderStateStore orders = orderStore();
         store.addDriver(new Driver(20L, driverB, DriverStatus.AVAILABLE));
         store.addDriver(new Driver(10L, driverA, DriverStatus.AVAILABLE));
 
@@ -59,7 +67,7 @@ class DispatchEngineTest {
             throw new IllegalArgumentException("No test route");
         };
 
-        DispatchEngine engine = new DispatchEngine(selector, store, router, 500.0, 10);
+        DispatchEngine engine = new DispatchEngine(selector, store, orders, router, 500.0, 10);
 
         Optional<DispatchAssignment> result = engine.dispatch(order());
 
@@ -68,28 +76,33 @@ class DispatchEngineTest {
         assertEquals(3.0, result.orElseThrow().driverToPickupRoute().totalTravelTimeSeconds());
         assertEquals(DriverStatus.BUSY, store.getDriver(20L).orElseThrow().status());
         assertEquals(DriverStatus.AVAILABLE, store.getDriver(10L).orElseThrow().status());
+        assertEquals(OrderStatus.ASSIGNED, orders.getOrder(100L).orElseThrow().status());
+        assertEquals(OptionalLong.of(20L), orders.getAssignedDriverId(100L));
     }
 
     @Test
     void shouldReturnEmptyWhenNoDriverIsAvailable() {
         InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        InMemoryOrderStateStore orders = orderStore();
         store.addDriver(new Driver(10L, driverA, DriverStatus.BUSY));
 
         CandidateSelector selector = new CandidateSelector(store, graph());
         Router router = (source, target) -> new Route(List.of(source, target), 10.0, 10.0);
-        DispatchEngine engine = new DispatchEngine(selector, store, router, 500.0, 10);
+        DispatchEngine engine = new DispatchEngine(selector, store, orders, router, 500.0, 10);
 
         assertTrue(engine.dispatch(order()).isEmpty());
+        assertEquals(OrderStatus.CREATED, orders.getOrder(100L).orElseThrow().status());
     }
 
     @Test
     void shouldRejectNonCreatedOrders() {
         InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
         store.addDriver(new Driver(10L, driverA, DriverStatus.AVAILABLE));
 
         CandidateSelector selector = new CandidateSelector(store, graph());
         Router router = (source, target) -> new Route(List.of(source, target), 10.0, 10.0);
-        DispatchEngine engine = new DispatchEngine(selector, store, router, 500.0, 10);
+        DispatchEngine engine = new DispatchEngine(selector, store, orders, router, 500.0, 10);
 
         Order completed = new Order(101L, pickup, dropoff, 1_000L, OrderStatus.COMPLETED);
 
@@ -99,6 +112,7 @@ class DispatchEngineTest {
     @Test
     void shouldUseCurrentDriverLocationDuringDispatch() {
         InMemoryDriverStateStore store = new InMemoryDriverStateStore();
+        InMemoryOrderStateStore orders = orderStore();
         store.addDriver(new Driver(10L, driverA, DriverStatus.AVAILABLE));
 
         CandidateSelector selector = new CandidateSelector(store, graph());
@@ -108,7 +122,7 @@ class DispatchEngineTest {
             }
             throw new IllegalArgumentException("Unexpected route: " + source + " -> " + target);
         };
-        DispatchEngine engine = new DispatchEngine(selector, store, router, 500.0, 10);
+        DispatchEngine engine = new DispatchEngine(selector, store, orders, router, 500.0, 10);
 
         store.updateLocation(10L, driverB);
 
@@ -119,5 +133,47 @@ class DispatchEngineTest {
         assertEquals(driverB, store.getDriver(10L).orElseThrow().currentNode());
         assertEquals(DriverStatus.BUSY, store.getDriver(10L).orElseThrow().status());
         assertEquals(7.0, result.orElseThrow().driverToPickupRoute().totalTravelTimeSeconds());
+    }
+
+    @Test
+    void shouldReleaseDriverWhenOrderClaimFails() {
+        InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
+        drivers.addDriver(new Driver(10L, driverA, DriverStatus.AVAILABLE));
+
+        Order order = order();
+        OrderStateStore rejectingOrders = new OrderStateStore() {
+            private final InMemoryOrderStateStore delegate = new InMemoryOrderStateStore();
+            {
+                delegate.addOrder(order);
+            }
+
+            @Override
+            public void addOrder(Order value) { delegate.addOrder(value); }
+
+            @Override
+            public Optional<Order> getOrder(long orderId) { return delegate.getOrder(orderId); }
+
+            @Override
+            public boolean tryAssign(long orderId, long driverId) { return false; }
+
+            @Override
+            public boolean tryTransition(long orderId, OrderStatus expectedStatus, OrderStatus newStatus) {
+                return delegate.tryTransition(orderId, expectedStatus, newStatus);
+            }
+
+            @Override
+            public OptionalLong getAssignedDriverId(long orderId) { return delegate.getAssignedDriverId(orderId); }
+
+            @Override
+            public int size() { return delegate.size(); }
+        };
+
+        CandidateSelector selector = new CandidateSelector(drivers, graph());
+        Router router = (source, target) -> new Route(List.of(source, target), 2.0, 10.0);
+        DispatchEngine engine = new DispatchEngine(selector, drivers, rejectingOrders, router, 500.0, 10);
+
+        assertTrue(engine.dispatch(order).isEmpty());
+        assertEquals(DriverStatus.AVAILABLE, drivers.getDriver(10L).orElseThrow().status());
+        assertEquals(OrderStatus.CREATED, rejectingOrders.getOrder(100L).orElseThrow().status());
     }
 }
