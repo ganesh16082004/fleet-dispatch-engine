@@ -35,6 +35,10 @@ public final class RoadGraph {
         return nodes.get(id);
     }
 
+    public Map<NodeId, RoadNode> nodes() {
+        return nodes;
+    }
+
     public List<RoadEdge> outgoing(NodeId id) {
         return outgoing.getOrDefault(id, List.of());
     }
