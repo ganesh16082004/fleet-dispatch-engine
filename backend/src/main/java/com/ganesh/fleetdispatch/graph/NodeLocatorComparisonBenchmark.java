@@ -3,6 +3,7 @@ package com.ganesh.fleetdispatch.graph;
 import com.ganesh.fleetdispatch.domain.Location;
 
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -76,6 +77,9 @@ public final class NodeLocatorComparisonBenchmark {
 
     private static void printStats(String name, TimingStats stats) {
         System.out.printf("  %-18s avg: %.3f ms%n", name, stats.averageMillis());
+        System.out.printf("  %-18s p50: %.3f ms%n", "", stats.percentileMillis(0.50));
+        System.out.printf("  %-18s p95: %.3f ms%n", "", stats.percentileMillis(0.95));
+        System.out.printf("  %-18s p99: %.3f ms%n", "", stats.percentileMillis(0.99));
         System.out.printf("  %-18s min: %.3f ms%n", "", stats.minMillis());
         System.out.printf("  %-18s max: %.3f ms%n", "", stats.maxMillis());
     }
@@ -96,10 +100,11 @@ public final class NodeLocatorComparisonBenchmark {
             runQueries(locator);
         }
 
+        long[] samples = new long[MEASURED_ROUNDS * QUERIES.size()];
+        int index = 0;
         long totalNanos = 0L;
         long minNanos = Long.MAX_VALUE;
         long maxNanos = Long.MIN_VALUE;
-        int lookupCount = 0;
 
         for (int round = 0; round < MEASURED_ROUNDS; round++) {
             for (Location query : QUERIES) {
@@ -107,14 +112,15 @@ public final class NodeLocatorComparisonBenchmark {
                 locator.findNearest(query);
                 long elapsed = System.nanoTime() - start;
 
+                samples[index++] = elapsed;
                 totalNanos += elapsed;
                 minNanos = Math.min(minNanos, elapsed);
                 maxNanos = Math.max(maxNanos, elapsed);
-                lookupCount++;
             }
         }
 
-        return new TimingStats(totalNanos, minNanos, maxNanos, lookupCount);
+        Arrays.sort(samples);
+        return new TimingStats(totalNanos, minNanos, maxNanos, samples);
     }
 
     private static void runQueries(NodeLocator locator) {
@@ -123,9 +129,40 @@ public final class NodeLocatorComparisonBenchmark {
         }
     }
 
-    private record TimingStats(long totalNanos, long minNanos, long maxNanos, int lookupCount) {
+    private record TimingStats(
+            long totalNanos,
+            long minNanos,
+            long maxNanos,
+            long[] samples) {
+
+        int lookupCount() {
+            return samples.length;
+        }
+
         double averageMillis() {
-            return totalNanos / (double) lookupCount / 1_000_000.0;
+            return totalNanos / (double) lookupCount() / 1_000_000.0;
+        }
+
+        double percentileMillis(double percentile) {
+            if (percentile < 0.0 || percentile > 1.0) {
+                throw new IllegalArgumentException("Percentile must be between 0 and 1");
+            }
+
+            if (samples.length == 1) {
+                return samples[0] / 1_000_000.0;
+            }
+
+            double rank = percentile * (samples.length - 1);
+            int lower = (int) Math.floor(rank);
+            int upper = (int) Math.ceil(rank);
+            if (lower == upper) {
+                return samples[lower] / 1_000_000.0;
+            }
+
+            double fraction = rank - lower;
+            double interpolated = samples[lower]
+                    + fraction * (samples[upper] - samples[lower]);
+            return interpolated / 1_000_000.0;
         }
 
         double minMillis() {
