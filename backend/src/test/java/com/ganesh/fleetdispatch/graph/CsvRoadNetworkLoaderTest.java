@@ -3,6 +3,7 @@ package com.ganesh.fleetdispatch.graph;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.ganesh.fleetdispatch.domain.Location;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
