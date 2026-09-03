@@ -17,7 +17,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class InMemoryDriverStateStore implements DriverStateStore {
     private static final double EARTH_RADIUS_METERS = 6_371_000.0;
     private static final double GRID_CELL_METERS = 250.0;
-    private static final double METERS_PER_DEGREE_LATITUDE = 111_320.0;
+    private static final double METERS_PER_DEGREE = 111_320.0;
+    private static final double CELL_DEGREES = GRID_CELL_METERS / METERS_PER_DEGREE;
 
     private final ConcurrentHashMap<Long, Driver> drivers = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<GridCell, Set<Long>> availableByCell = new ConcurrentHashMap<>();
@@ -136,10 +137,10 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
             return getAvailableDrivers();
         }
 
-        double longitudeDelta = metersToLongitudeDegrees(radiusMeters, location.latitude());
         double latitudeDelta = metersToLatitudeDegrees(radiusMeters);
-        int minX = cellX(location.longitude() - longitudeDelta, location.latitude());
-        int maxX = cellX(location.longitude() + longitudeDelta, location.latitude());
+        double longitudeDelta = metersToLongitudeDegrees(radiusMeters, location.latitude());
+        int minX = cellX(location.longitude() - longitudeDelta);
+        int maxX = cellX(location.longitude() + longitudeDelta);
         int minY = cellY(location.latitude() - latitudeDelta);
         int maxY = cellY(location.latitude() + latitudeDelta);
 
@@ -228,29 +229,23 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
     }
 
     private static GridCell cellFor(Location location) {
-        return new GridCell(
-                cellX(location.longitude(), location.latitude()),
-                cellY(location.latitude()));
+        return new GridCell(cellX(location.longitude()), cellY(location.latitude()));
     }
 
-    private static int cellX(double longitude, double latitude) {
-        return (int) Math.floor(longitude / metersPerDegreeLongitude(latitude) * METERS_PER_DEGREE_LATITUDE / GRID_CELL_METERS);
+    private static int cellX(double longitude) {
+        return (int) Math.floor(longitude / CELL_DEGREES);
     }
 
     private static int cellY(double latitude) {
-        return (int) Math.floor(latitude / (GRID_CELL_METERS / METERS_PER_DEGREE_LATITUDE));
-    }
-
-    private static double metersPerDegreeLongitude(double latitude) {
-        return METERS_PER_DEGREE_LATITUDE * Math.cos(Math.toRadians(latitude));
+        return (int) Math.floor(latitude / CELL_DEGREES);
     }
 
     private static double metersToLatitudeDegrees(double meters) {
-        return meters / METERS_PER_DEGREE_LATITUDE;
+        return meters / METERS_PER_DEGREE;
     }
 
     private static double metersToLongitudeDegrees(double meters, double latitude) {
-        return meters / Math.max(metersPerDegreeLongitude(latitude), 1.0);
+        return meters / Math.max(METERS_PER_DEGREE * Math.cos(Math.toRadians(latitude)), 1.0);
     }
 
     private static double haversineMeters(Location a, Location b) {
