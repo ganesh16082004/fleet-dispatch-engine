@@ -104,7 +104,7 @@ class InMemoryDriverStateStoreTest {
     void shouldAllowExactlyOneConcurrentReservation() throws Exception {
         InMemoryDriverStateStore store = new InMemoryDriverStateStore();
         NodeId node = new NodeId(100L);
-        store.addDriver(new Driver(1L, node, DriverStatus.AVAILABLE);
+        store.addDriver(new Driver(1L, node, DriverStatus.AVAILABLE));
 
         int workers = 32;
         ExecutorService executor = Executors.newFixedThreadPool(workers);
