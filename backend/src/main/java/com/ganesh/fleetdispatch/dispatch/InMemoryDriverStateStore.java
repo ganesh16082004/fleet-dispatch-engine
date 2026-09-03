@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -54,6 +55,24 @@ public final class InMemoryDriverStateStore implements DriverStateStore {
 
         drivers.computeIfPresent(driverId, (id, current) -> {
             if (current.status() != DriverStatus.AVAILABLE) {
+                return current;
+            }
+
+            reserved.set(true);
+            return new Driver(current.id(), current.currentNode(), DriverStatus.BUSY);
+        });
+
+        return reserved.get();
+    }
+
+    @Override
+    public boolean reserveDriver(long driverId, NodeId expectedNode) {
+        Objects.requireNonNull(expectedNode, "expectedNode must not be null");
+        AtomicBoolean reserved = new AtomicBoolean(false);
+
+        drivers.computeIfPresent(driverId, (id, current) -> {
+            if (current.status() != DriverStatus.AVAILABLE
+                    || !current.currentNode().equals(expectedNode)) {
                 return current;
             }
 
