@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""Convert an OSM XML/XML.GZ extract into the Fleet Dispatch CSV snapshot.
+
+The script intentionally uses only Python's standard library so the preprocessing
+pipeline is easy to reproduce on a developer machine or in CI.
+
+Input:
+  .osm or .osm.gz containing OSM nodes and ways.
+
+Output:
+  nodes.csv: id,latitude,longitude
+  edges.csv: from,to,distance_meters,travel_time_seconds
+
+Road semantics are deliberately conservative: only common drivable highway
+classes are retained; explicit motor-vehicle/vehicle/access restrictions are
+excluded; oneway=-1 reverses the directed segments.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import gzip
+import math
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TextIO
+
+
+# Common urban road classes suitable for a delivery vehicle simulation.
+ALLOWED_HIGHWAYS = {
+    "motorway",
+    "motorway_link",
+    "trunk",
+    "trunk_link",
+    "primary",
+    "primary_link",
+    "secondary",
+    "secondary_link",
+    "tertiary",
+    "tertiary_link",
+    "unclassified",
+    "residential",
+    "living_street",
+    "service",
+}
+
+# Baseline free-flow speeds when maxspeed is absent.
+DEFAULT_SPEED_KPH = {
+    "motorway": 80.0,
+    "motorway_link": 55.0,
+    "trunk": 65.0,
+    "trunk_link": 50.0,
+    "primary": 50.0,
+    "primary_link": 45.0,
+    "secondary": 40.0,
+    "secondary_link": 35.0,
+    "tertiary": 35.0,
+    "tertiary_link": 30.0,
+    "unclassified": 30.0,
+    "residential": 25.0,
+    "living_street": 15.0,
+    "service": 15.0,
+}
+
+EARTH_RADIUS_M = 6_371_008.8
+
+
+@dataclass(frozen=True)
+class OsmNode:
+    latitude: float
+    longitude: float
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input", type=Path, help="OSM .osm or .osm.gz file")
+    parser.add_argument("output_dir", type=Path, help="Directory for nodes.csv and edges.csv")
+    return parser.parse_args()
+
+
+def open_input(path: Path) -> TextIO:
+    if path.suffix.lower() == ".gz":
+        return gzip.open(path, "rt", encoding="utf-8")
+    return path.open("r", encoding="utf-8")
+
+
+def haversine_meters(a: OsmNode, b: OsmNode) -> float:
+    lat1 = math.radians(a.latitude)
+    lat2 = math.radians(b.latitude)
+    dlat = lat2 - lat1
+    dlon = math.radians(b.longitude - a.longitude)
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 2.0 * EARTH_RADIUS_M * math.asin(math.sqrt(h))
+
+
+def parse_speed_kph(value: str | None, highway: str) -> float:
+    if not value:
+        return DEFAULT_SPEED_KPH[highway]
+
+    normalized = value.strip().lower().replace(" ", "")
+    if normalized in {"none", "signals", "walk"}:
+        return DEFAULT_SPEED_KPH[highway]
+
+    # Handle the common forms: "50", "50 km/h", "30mph".
+    numeric = ""
+    unit = "kph"
+    for char in normalized:
+        if char.isdigit() or char == ".":
+            numeric += char
+        else:
+            if "mph" in normalized:
+                unit = "mph"
+            break
+
+    try:
+        speed = float(numeric)
+    except ValueError:
+        return DEFAULT_SPEED_KPH[highway]
+
+    if speed <= 0 or not math.isfinite(speed):
+        return DEFAULT_SPEED_KPH[highway]
+    return speed * 1.609344 if unit == "mph" else speed
+
+
+def is_drivable(tags: dict[str, str], highway: str) -> bool:
+    if highway not in ALLOWED_HIGHWAYS:
+        return False
+    for key in ("access", "vehicle", "motor_vehicle"):
+        value = tags.get(key, "").strip().lower()
+        if value in {"no", "private"}:
+            return False
+    return True
+
+
+def parse_osm(path: Path) -> tuple[dict[int, OsmNode], list[tuple[list[int], dict[str, str]]]]:
+    nodes: dict[int, OsmNode] = {}
+    ways: list[tuple[list[int], dict[str, str]]] = []
+
+    with open_input(path) as stream:
+        for event, element in ET.iterparse(stream, events=("end",)):
+            if element.tag == "node":
+                node_id = int(element.attrib["id"])
+                nodes[node_id] = OsmNode(
+                    latitude=float(element.attrib["lat"]),
+                    longitude=float(element.attrib["lon"]),
+                )
+                element.clear()
+            elif element.tag == "way":
+                refs: list[int] = []
+                tags: dict[str, str] = {}
+                for child in element:
+                    if child.tag == "nd":
+                        refs.append(int(child.attrib["ref"]))
+                    elif child.tag == "tag":
+                        tags[child.attrib["k"]] = child.attrib["v"]
+                if refs:
+                    ways.append((refs, tags))
+                element.clear()
+
+    return nodes, ways
+
+
+def write_snapshot(
+    nodes: dict[int, OsmNode],
+    ways: list[tuple[list[int], dict[str, str]]],
+    output_dir: Path,
+) -> tuple[int, int]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    used_nodes: set[int] = set()
+    edge_rows: list[tuple[int, int, float, float]] = []
+
+    for refs, tags in ways:
+        highway = tags.get("highway")
+        if highway is None or not is_drivable(tags, highway):
+            continue
+        if len(refs) < 2:
+            continue
+
+        speed_kph = parse_speed_kph(tags.get("maxspeed"), highway)
+        speed_mps = speed_kph / 3.6
+        if speed_mps <= 0:
+            continue
+
+        direction = tags.get("oneway", "").strip().lower()
+        reverse = direction == "-1"
+        bidirectional = direction not in {"yes", "1", "true", "-1"}
+
+        for left, right in zip(refs, refs[1:]):
+            if left not in nodes or right not in nodes:
+                continue
+            distance = haversine_meters(nodes[left], nodes[right])
+            if distance <= 0 or not math.isfinite(distance):
+                continue
+            travel_time = distance / speed_mps
+
+            if reverse:
+                edge_rows.append((right, left, distance, travel_time))
+            else:
+                edge_rows.append((left, right, distance, travel_time))
+                if bidirectional:
+                    edge_rows.append((right, left, distance, travel_time))
+            used_nodes.add(left)
+            used_nodes.add(right)
+
+    with (output_dir / "nodes.csv").open("w", newline="", encoding="utf-8") as node_file:
+        writer = csv.writer(node_file)
+        writer.writerow(("id", "latitude", "longitude"))
+        for node_id in sorted(used_nodes):
+            node = nodes[node_id]
+            writer.writerow((node_id, f"{node.latitude:.7f}", f"{node.longitude:.7f}"))
+
+    with (output_dir / "edges.csv").open("w", newline="", encoding="utf-8") as edge_file:
+        writer = csv.writer(edge_file)
+        writer.writerow(("from", "to", "distance_meters", "travel_time_seconds"))
+        for row in edge_rows:
+            writer.writerow((row[0], row[1], f"{row[2]:.3f}", f"{row[3]:.3f}"))
+
+    return len(used_nodes), len(edge_rows)
+
+
+def main() -> None:
+    args = parse_args()
+    if not args.input.is_file():
+        raise SystemExit(f"Input file does not exist: {args.input}")
+
+    nodes, ways = parse_osm(args.input)
+    node_count, edge_count = write_snapshot(nodes, ways, args.output_dir)
+
+    print(f"OSM nodes parsed: {len(nodes):,}")
+    print(f"OSM ways parsed: {len(ways):,}")
+    print(f"Snapshot nodes:   {node_count:,}")
+    print(f"Snapshot edges:   {edge_count:,}")
+    print(f"Wrote: {args.output_dir / 'nodes.csv'}")
+    print(f"Wrote: {args.output_dir / 'edges.csv'}")
+
+
+if __name__ == "__main__":
+    main()
