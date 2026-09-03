@@ -14,6 +14,9 @@ public interface DriverStateStore {
 
     void updateStatus(long driverId, DriverStatus newStatus);
 
+    /** Atomically changes an AVAILABLE driver to BUSY if it is still available. */
+    boolean reserveDriver(long driverId);
+
     List<Driver> getAvailableDrivers();
 
     int size();
