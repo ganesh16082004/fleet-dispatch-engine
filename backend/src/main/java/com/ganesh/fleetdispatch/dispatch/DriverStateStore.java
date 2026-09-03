@@ -17,6 +17,12 @@ public interface DriverStateStore {
     /** Atomically changes an AVAILABLE driver to BUSY if it is still available. */
     boolean reserveDriver(long driverId);
 
+    /**
+     * Atomically changes an AVAILABLE driver at the expected node to BUSY.
+     * Returns false if the driver's state changed before reservation.
+     */
+    boolean reserveDriver(long driverId, NodeId expectedNode);
+
     List<Driver> getAvailableDrivers();
 
     int size();
