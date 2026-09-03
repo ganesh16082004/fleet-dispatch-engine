@@ -1,5 +1,6 @@
 package com.ganesh.fleetdispatch.dispatch;
 
+import com.ganesh.fleetdispatch.domain.Location;
 import com.ganesh.fleetdispatch.graph.NodeId;
 
 import java.util.List;
@@ -31,6 +32,12 @@ public interface DriverStateStore {
     boolean releaseDriver(long driverId, NodeId expectedNode);
 
     List<Driver> getAvailableDrivers();
+
+    /**
+     * Returns available drivers within the supplied geographic radius,
+     * capped at maxCandidates. Implementations may use a spatial index.
+     */
+    List<Driver> getAvailableDriversNear(Location location, double radiusMeters, int maxCandidates);
 
     int size();
 }
