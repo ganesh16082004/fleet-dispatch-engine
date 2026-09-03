@@ -1,24 +1,25 @@
 package com.ganesh.fleetdispatch.routing;
 
 import com.ganesh.fleetdispatch.domain.Location;
+import com.ganesh.fleetdispatch.graph.CsvRoadNetworkLoader;
 import com.ganesh.fleetdispatch.graph.KdTreeNodeLocator;
 import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.graph.NodeLocator;
 import com.ganesh.fleetdispatch.graph.RoadEdge;
 import com.ganesh.fleetdispatch.graph.RoadGraph;
 import com.ganesh.fleetdispatch.graph.Route;
-import com.ganesh.fleetdispatch.graph.CsvRoadNetworkLoader;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
  * Benchmarks Dijkstra and A* on real Bengaluru road-network routes.
  *
  * <p>Route endpoints begin as geographic coordinates and are resolved through
- * the production KD-tree locator. The maximum graph edge speed is computed from
- * the snapshot and supplied to A* so the geographic heuristic remains a valid
+ * the KD-tree locator. The maximum graph edge speed is computed from the
+ * snapshot and supplied to A* so the geographic heuristic remains a valid
  * lower bound on travel time.</p>
  */
 public final class RealRoutingBenchmark {
@@ -55,9 +56,9 @@ public final class RealRoutingBenchmark {
         Path nodesFile = Path.of(args[0]);
         Path edgesFile = Path.of(args[1]);
         RoadGraph graph = new CsvRoadNetworkLoader(nodesFile, edgesFile).load();
+
         NodeLocator locator = new KdTreeNodeLocator(graph);
         double maximumSpeed = maximumEdgeSpeedMetersPerSecond(graph);
-
         DijkstraRouter dijkstra = new DijkstraRouter(graph);
         AStarRouter aStar = new AStarRouter(graph, maximumSpeed);
         List<ResolvedRoute> resolvedRoutes = resolveRoutes(locator);
@@ -65,10 +66,9 @@ public final class RealRoutingBenchmark {
         verifyCorrectness(dijkstra, aStar, resolvedRoutes);
         BenchmarkStats dijkstraStats = measureDijkstra(dijkstra, resolvedRoutes);
         BenchmarkStats aStarStats = measureAStar(aStar, resolvedRoutes);
-
-        double speedup = aStarStats.averageMillis() == 0.0
-                ? Double.POSITIVE_INFINITY
-                : dijkstraStats.averageMillis() / aStarStats.averageMillis();
+        double speedup = dijkstraStats.averageMillis() / aStarStats.averageMillis();
+        double expansionReduction = 100.0
+                * (1.0 - aStarStats.averageExpanded() / dijkstraStats.averageExpanded());
 
         System.out.println("=== Real Bengaluru Routing Benchmark ===");
         System.out.println();
@@ -76,21 +76,27 @@ public final class RealRoutingBenchmark {
         System.out.printf("Graph edges:             %,d%n", graph.edgeCount());
         System.out.printf("Routes:                  %d%n", resolvedRoutes.size());
         System.out.printf("Maximum edge speed:      %.3f km/h%n", maximumSpeed * 3.6);
+        System.out.printf("Measured route runs:     %d%n", dijkstraStats.sampleCount());
         System.out.println();
+
         System.out.println("Route samples");
         printRouteSamples(dijkstra, resolvedRoutes);
         System.out.println();
+
         System.out.println("Routing timing");
         printStats("Dijkstra", dijkstraStats);
         printStats("A*", aStarStats);
         System.out.printf("  Runtime speedup:       %.2fx%n", speedup);
         System.out.println();
+
         System.out.println("Algorithm work");
         System.out.printf("  Dijkstra avg expanded:  %,.1f nodes%n", dijkstraStats.averageExpanded());
         System.out.printf("  A* avg expanded:       %,.1f nodes%n", aStarStats.averageExpanded());
+        System.out.printf("  Expanded reduction:    %.2f%%%n", expansionReduction);
         System.out.printf("  Dijkstra avg relaxed:   %,.1f edges%n", dijkstraStats.averageRelaxed());
         System.out.printf("  A* avg relaxed:         %,.1f edges%n", aStarStats.averageRelaxed());
         System.out.println();
+
         System.out.println("Correctness");
         System.out.println("  Dijkstra/A* agreement:  PASS");
     }
@@ -112,80 +118,75 @@ public final class RealRoutingBenchmark {
         for (ResolvedRoute route : routes) {
             Route expected = dijkstra.findRoute(route.source(), route.target());
             Route actual = aStar.findRoute(route.source(), route.target());
-            assertSameRoute(route, expected, actual);
+            if (Math.abs(expected.totalTravelTimeSeconds() - actual.totalTravelTimeSeconds()) > EPSILON
+                    || Math.abs(expected.totalDistanceMeters() - actual.totalDistanceMeters()) > EPSILON) {
+                throw new IllegalStateException(
+                        "Routing mismatch for " + route.source() + " -> " + route.target()
+                                + ": Dijkstra=" + expected.totalTravelTimeSeconds()
+                                + "s, A*=" + actual.totalTravelTimeSeconds() + "s");
+            }
         }
     }
 
     private static BenchmarkStats measureDijkstra(
             DijkstraRouter router,
             List<ResolvedRoute> routes) {
-        for (int round = 0; round < WARMUP_ROUNDS; round++) {
-            runDijkstraQueries(router, routes);
-        }
+        warmupDijkstra(router, routes);
         return measureDijkstraQueries(router, routes);
     }
 
     private static BenchmarkStats measureAStar(
             AStarRouter router,
             List<ResolvedRoute> routes) {
-        for (int round = 0; round < WARMUP_ROUNDS; round++) {
-            runAStarQueries(router, routes);
-        }
+        warmupAStar(router, routes);
         return measureAStarQueries(router, routes);
     }
 
-    private static void runDijkstraQueries(DijkstraRouter router, List<ResolvedRoute> routes) {
-        for (ResolvedRoute route : routes) {
-            router.findRoute(route.source(), route.target());
-        }
+    private static BenchmarkStats measureDijkstraQueries(
+            DijkstraRouter router,
+            List<ResolvedRoute> routes) {
+        return measure((route, metrics) -> router.findRoute(route.source(), route.target(), metrics), routes);
     }
 
-    private static void runAStarQueries(AStarRouter router, List<ResolvedRoute> routes) {
-        for (ResolvedRoute route : routes) {
-            router.findRoute(route.source(), route.target());
-        }
+    private static BenchmarkStats measureAStarQueries(
+            AStarRouter router,
+            List<ResolvedRoute> routes) {
+        return measure((route, metrics) -> router.findRoute(route.source(), route.target(), metrics), routes);
     }
 
-    private static BenchmarkStats measureDijkstra(DijkstraRouter router, List<ResolvedRoute> routes, int ignored) {
-        return measureDijkstraQueries(router, routes);
-    }
-
-    private static BenchmarkStats measureDijkstraQueries(DijkstraRouter router, List<ResolvedRoute> routes) {
-        long totalNanos = 0L;
+    private static BenchmarkStats measure(
+            RouteRunner runner,
+            List<ResolvedRoute> routes) {
+        List<Long> times = new ArrayList<>();
         long totalExpanded = 0L;
         long totalRelaxed = 0L;
-        int count = 0;
         for (int round = 0; round < MEASURED_ROUNDS; round++) {
             for (ResolvedRoute route : routes) {
                 RoutingMetrics metrics = new RoutingMetrics();
                 long start = System.nanoTime();
-                router.findRoute(route.source(), route.target(), metrics);
-                totalNanos += System.nanoTime() - start;
+                runner.run(route, metrics);
+                times.add(System.nanoTime() - start);
                 totalExpanded += metrics.nodesExpanded();
                 totalRelaxed += metrics.edgesRelaxed();
-                count++;
             }
         }
-        return new BenchmarkStats(totalNanos, totalExpanded, totalRelaxed, count);
+        return new BenchmarkStats(times, totalExpanded, totalRelaxed);
     }
 
-    private static BenchmarkStats measureAStarQueries(AStarRouter router, List<ResolvedRoute> routes) {
-        long totalNanos = 0L;
-        long totalExpanded = 0L;
-        long totalRelaxed = 0L;
-        int count = 0;
-        for (int round = 0; round < MEASURED_ROUNDS; round++) {
+    private static void warmupDijkstra(DijkstraRouter router, List<ResolvedRoute> routes) {
+        for (int round = 0; round < WARMUP_ROUNDS; round++) {
             for (ResolvedRoute route : routes) {
-                RoutingMetrics metrics = new RoutingMetrics();
-                long start = System.nanoTime();
-                router.findRoute(route.source(), route.target(), metrics);
-                totalNanos += System.nanoTime() - start;
-                totalExpanded += metrics.nodesExpanded();
-                totalRelaxed += metrics.edgesRelaxed();
-                count++;
+                router.findRoute(route.source(), route.target());
             }
         }
-        return new BenchmarkStats(totalNanos, totalExpanded, totalRelaxed, count);
+    }
+
+    private static void warmupAStar(AStarRouter router, List<ResolvedRoute> routes) {
+        for (int round = 0; round < WARMUP_ROUNDS; round++) {
+            for (ResolvedRoute route : routes) {
+                router.findRoute(route.source(), route.target());
+            }
+        }
     }
 
     private static double maximumEdgeSpeedMetersPerSecond(RoadGraph graph) {
@@ -219,17 +220,16 @@ public final class RealRoutingBenchmark {
 
     private static void printStats(String name, BenchmarkStats stats) {
         System.out.printf("  %-20s avg: %.3f ms%n", name, stats.averageMillis());
-        System.out.printf("  %-20s p50: %.3f ms%n", "", stats.averageMillis());
+        System.out.printf("  %-20s p50: %.3f ms%n", "", stats.percentileMillis(0.50));
+        System.out.printf("  %-20s p95: %.3f ms%n", "", stats.percentileMillis(0.95));
+        System.out.printf("  %-20s p99: %.3f ms%n", "", stats.percentileMillis(0.99));
+        System.out.printf("  %-20s min: %.3f ms%n", "", stats.minMillis());
+        System.out.printf("  %-20s max: %.3f ms%n", "", stats.maxMillis());
     }
 
-    private static void assertSameRoute(ResolvedRoute route, Route expected, Route actual) {
-        if (Math.abs(expected.totalTravelTimeSeconds() - actual.totalTravelTimeSeconds()) > EPSILON
-                || Math.abs(expected.totalDistanceMeters() - actual.totalDistanceMeters()) > EPSILON) {
-            throw new IllegalStateException(
-                    "Routing mismatch for " + route.source() + " -> " + route.target()
-                            + ": Dijkstra=" + expected.totalTravelTimeSeconds()
-                            + "s, A*=" + actual.totalTravelTimeSeconds() + "s");
-        }
+    @FunctionalInterface
+    private interface RouteRunner {
+        Route run(ResolvedRoute route, RoutingMetrics metrics);
     }
 
     private record RoutingCase(Location source, Location target) {
@@ -239,20 +239,42 @@ public final class RealRoutingBenchmark {
     }
 
     private record BenchmarkStats(
-            long totalNanos,
+            List<Long> nanos,
             long totalExpanded,
-            long totalRelaxed,
-            int queryCount) {
+            long totalRelaxed) {
+        BenchmarkStats {
+            nanos = List.copyOf(nanos);
+        }
+
+        int sampleCount() {
+            return nanos.size();
+        }
+
         double averageMillis() {
-            return totalNanos / (double) queryCount / 1_000_000.0;
+            return nanos.stream().mapToLong(Long::longValue).average().orElse(0.0) / 1_000_000.0;
+        }
+
+        double percentileMillis(double percentile) {
+            List<Long> sorted = new ArrayList<>(nanos);
+            sorted.sort(Comparator.naturalOrder());
+            int index = Math.min(sorted.size() - 1, (int) Math.ceil(percentile * sorted.size()) - 1);
+            return sorted.get(index) / 1_000_000.0;
+        }
+
+        double minMillis() {
+            return nanos.stream().mapToLong(Long::longValue).min().orElse(0L) / 1_000_000.0;
+        }
+
+        double maxMillis() {
+            return nanos.stream().mapToLong(Long::longValue).max().orElse(0L) / 1_000_000.0;
         }
 
         double averageExpanded() {
-            return totalExpanded / (double) queryCount;
+            return totalExpanded / (double) nanos.size();
         }
 
         double averageRelaxed() {
-            return totalRelaxed / (double) queryCount;
+            return totalRelaxed / (double) nanos.size();
         }
     }
 }
