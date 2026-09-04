@@ -1,6 +1,8 @@
 package com.ganesh.fleetdispatch.cache;
 
 import com.ganesh.fleetdispatch.graph.NodeId;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -15,6 +17,17 @@ public final class RedisDriverLocationCache implements DriverLocationCache {
 
     private final StringRedisTemplate redis;
     private final Duration ttl;
+
+    @Autowired
+    public RedisDriverLocationCache(
+            StringRedisTemplate redis,
+            @Value("${fleet.redis.driver-location-ttl:10m}") Duration ttl) {
+        this.redis = Objects.requireNonNull(redis, "redis");
+        this.ttl = Objects.requireNonNull(ttl, "ttl");
+        if (ttl.isZero() || ttl.isNegative()) {
+            throw new IllegalArgumentException("ttl must be positive");
+        }
+    }
 
     public RedisDriverLocationCache(StringRedisTemplate redis) {
         this(redis, DEFAULT_TTL);
