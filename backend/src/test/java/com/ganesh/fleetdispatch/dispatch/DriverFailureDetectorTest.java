@@ -115,7 +115,6 @@ class DriverFailureDetectorTest {
                         List.of(
                                 new RouteStop(100L, RouteStopType.PICKUP, pickupNode),
                                 new RouteStop(100L, RouteStopType.DROPOFF, dropoffNode),
-                                new RouteStop(200L, RouteStopType.PICKUP, pickupNode),
                                 new RouteStop(200L, RouteStopType.DROPOFF, dropoffNode))));
         InMemoryDriverRecoveryQueue queue = new InMemoryDriverRecoveryQueue();
         InMemoryDriverHeartbeatStore heartbeats = new InMemoryDriverHeartbeatStore();
