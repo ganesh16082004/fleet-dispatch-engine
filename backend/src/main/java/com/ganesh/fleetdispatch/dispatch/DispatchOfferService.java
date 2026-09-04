@@ -11,7 +11,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** Creates and manages expiring driver offers with atomic lifecycle transitions. */
+/** Creates and manages expiring driver offers with route-aware candidate ranking. */
 public final class DispatchOfferService {
     private final CandidateSelector candidateSelector;
     private final DriverStateStore driverStateStore;
@@ -19,6 +19,7 @@ public final class DispatchOfferService {
     private final DriverRouteStore driverRouteStore;
     private final RouterAdapter routerAdapter;
     private final DispatchOfferStore offerStore;
+    private final OfferCandidateSelector offerCandidateSelector;
     private final double searchRadiusMeters;
     private final int maxCandidates;
     private final long offerTtlMillis;
@@ -53,6 +54,10 @@ public final class DispatchOfferService {
         this.searchRadiusMeters = searchRadiusMeters;
         this.maxCandidates = maxCandidates;
         this.offerTtlMillis = offerTtlMillis;
+        this.offerCandidateSelector = new OfferCandidateSelector(
+                candidateSelector,
+                routerAdapter::findRoute,
+                maxCandidates);
     }
 
     public Optional<DispatchOffer> createOffer(Order order, long nowMillis) {
@@ -75,19 +80,14 @@ public final class DispatchOfferService {
                 return Optional.empty();
             }
 
-            List<DriverCandidate> candidates = candidateSelector
-                    .select(order, searchRadiusMeters, maxCandidates);
-            for (DriverCandidate candidate : candidates) {
-                Driver driver = candidate.driver();
-                if (excludedDriverIds.contains(driver.id())) {
-                    continue;
-                }
+            List<OfferCandidate> candidates = offerCandidateSelector
+                    .select(order, searchRadiusMeters).stream()
+                    .filter(candidate -> !excludedDriverIds.contains(candidate.driver().id()))
+                    .toList();
 
+            for (OfferCandidate candidate : candidates) {
+                Driver driver = candidate.driver();
                 NodeId expectedNode = driver.currentNode();
-                Optional<Route> route = routerAdapter.findRoute(driver.currentNode(), order.pickupNode());
-                if (route.isEmpty()) {
-                    continue;
-                }
 
                 if (!driverStateStore.reserveDriver(driver.id(), expectedNode)) {
                     continue;
@@ -104,7 +104,7 @@ public final class DispatchOfferService {
                         order.id(),
                         driver.id(),
                         expectedNode,
-                        route.get(),
+                        candidate.route(),
                         nowMillis,
                         Math.addExact(nowMillis, offerTtlMillis),
                         DispatchOfferStatus.PENDING);
