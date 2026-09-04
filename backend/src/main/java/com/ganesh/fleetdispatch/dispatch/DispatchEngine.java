@@ -165,6 +165,99 @@ public final class DispatchEngine {
         return Optional.empty();
     }
 
+    /** Atomically cancels an order and removes it from its driver's route plan. */
+    public boolean cancelOrder(long orderId) {
+        OptionalLongWithFallback assignedDriver = findAssignedDriver(orderId);
+        if (assignedDriver.driverId() != null) {
+            long driverId = assignedDriver.driverId();
+            synchronized (driverDispatchLocks.computeIfAbsent(driverId, ignored -> new Object())) {
+                if (!orderStateStore.tryCancel(orderId)) {
+                    return false;
+                }
+                removeOrderFromRoute(driverId, orderId);
+                normalizeDriverStatus(driverId);
+                return true;
+            }
+        }
+
+        return orderStateStore.tryCancel(orderId);
+    }
+
+    /**
+     * Marks a failed driver OFFLINE, requeues its ASSIGNED orders, clears its route,
+     * and attempts to dispatch those orders to alternative drivers.
+     */
+    public List<DispatchAssignment> reassignDriver(
+            long driverId,
+            DeliveryConstraints deliveryConstraints) {
+        Objects.requireNonNull(deliveryConstraints, "deliveryConstraints");
+        driverStateStore.getDriver(driverId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown driver: " + driverId));
+
+        synchronized (driverDispatchLocks.computeIfAbsent(driverId, ignored -> new Object())) {
+            driverStateStore.updateStatus(driverId, DriverStatus.OFFLINE);
+
+            List<Order> ordersToReassign = driverRouteStore.getPlan(driverId)
+                    .map(DriverRoutePlan::activeOrders)
+                    .orElse(List.of())
+                    .stream()
+                    .filter(order -> order.status() == OrderStatus.ASSIGNED)
+                    .filter(order -> orderStateStore.tryRequeue(order.id(), driverId))
+                    .toList();
+
+            driverRouteStore.remove(driverId);
+
+            List<DispatchAssignment> assignments = new ArrayList<>();
+            for (Order order : ordersToReassign) {
+                dispatch(order, deliveryConstraints).ifPresent(assignments::add);
+            }
+            return List.copyOf(assignments);
+        }
+    }
+
+    /** Uses the default production delivery SLA constraints for driver recovery. */
+    public List<DispatchAssignment> reassignDriver(long driverId) {
+        return reassignDriver(
+                driverId,
+                new DeliveryConstraints(
+                        DEFAULT_MAX_EXISTING_ETA_INCREASE_SECONDS,
+                        DEFAULT_MAX_NEW_ORDER_DELIVERY_ETA_SECONDS));
+    }
+
+    private OptionalLongWithFallback findAssignedDriver(long orderId) {
+        java.util.OptionalLong assigned = orderStateStore.getAssignedDriverId(orderId);
+        return assigned.isPresent()
+                ? new OptionalLongWithFallback(assigned.getAsLong())
+                : new OptionalLongWithFallback(null);
+    }
+
+    private void removeOrderFromRoute(long driverId, long orderId) {
+        Optional<DriverRoutePlan> existing = driverRouteStore.getPlan(driverId);
+        if (existing.isEmpty()) {
+            return;
+        }
+
+        DriverRoutePlan plan = existing.get();
+        List<Order> remainingOrders = plan.activeOrders().stream()
+                .filter(order -> order.id() != orderId)
+                .toList();
+        List<RouteStop> remainingStops = plan.stops().stream()
+                .filter(stop -> stop.orderId() != orderId)
+                .toList();
+
+        driverRouteStore.putPlan(
+                driverId,
+                remainingOrders.isEmpty()
+                        ? DriverRoutePlan.empty()
+                        : new DriverRoutePlan(remainingOrders, remainingStops));
+    }
+
+    private void normalizeDriverStatus(long driverId) {
+        if (driverRouteStore.getPlan(driverId).isEmpty()) {
+            driverStateStore.updateStatus(driverId, DriverStatus.AVAILABLE);
+        }
+    }
+
     private Optional<DispatchAssignment> dispatchIntoExistingRoute(
             Order order,
             double radius,
@@ -511,5 +604,8 @@ public final class DispatchEngine {
     }
 
     private record RouteOption(Driver driver, RouteInsertionResult insertion) {
+    }
+
+    private record OptionalLongWithFallback(Long driverId) {
     }
 }
