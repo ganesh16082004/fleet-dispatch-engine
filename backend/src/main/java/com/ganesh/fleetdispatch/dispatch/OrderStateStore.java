@@ -9,16 +9,25 @@ public interface OrderStateStore {
 
     Optional<Order> getOrder(long orderId);
 
-    /**
-     * Atomically claims a CREATED order for a driver and transitions it to ASSIGNED.
-     * Returns false if the order does not exist or is no longer CREATED.
-     */
+    /** Atomically claims a CREATED order for a driver and transitions it to ASSIGNED. */
     boolean tryAssign(long orderId, long driverId);
+
+    /** Atomically offers a CREATED order to a driver. */
+    boolean tryOffer(long orderId, long driverId);
+
+    /** Atomically accepts an OFFERED order and transitions it to ASSIGNED. */
+    boolean tryAcceptOffer(long orderId, long expectedDriverId);
+
+    /** Atomically rejects an OFFERED order and returns it to CREATED. */
+    boolean tryRejectOffer(long orderId, long expectedDriverId);
+
+    /** Atomically expires an OFFERED order and returns it to CREATED. */
+    boolean tryExpireOffer(long orderId, long expectedDriverId);
 
     /** Atomically transitions an order from one expected state to another. */
     boolean tryTransition(long orderId, OrderStatus expectedStatus, OrderStatus newStatus);
 
-    /** Returns the driver assigned by a successful tryAssign, if any. */
+    /** Returns the driver currently attached to an assigned or offered order, if any. */
     OptionalLong getAssignedDriverId(long orderId);
 
     int size();
