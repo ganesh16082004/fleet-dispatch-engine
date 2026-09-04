@@ -12,6 +12,9 @@ public interface OrderStateStore {
     /** Atomically claims a CREATED order for a driver and transitions it to ASSIGNED. */
     boolean tryAssign(long orderId, long driverId);
 
+    /** Atomically claims a RECOVERY_REQUIRED order for a replacement driver and transitions it to ASSIGNED. */
+    boolean tryAssignRecovery(long orderId, long driverId);
+
     /** Atomically offers a CREATED order to a driver. */
     boolean tryOffer(long orderId, long driverId);
 

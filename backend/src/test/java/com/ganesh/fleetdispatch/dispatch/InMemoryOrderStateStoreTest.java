@@ -54,6 +54,17 @@ class InMemoryOrderStateStoreTest {
     }
 
     @Test
+    void shouldAssignRecoveryOrderAtomically() {
+        InMemoryOrderStateStore store = new InMemoryOrderStateStore();
+        store.addOrder(new Order(100L, new NodeId(10L), new NodeId(20L), 1_000L, OrderStatus.RECOVERY_REQUIRED));
+
+        assertTrue(store.tryAssignRecovery(100L, 42L));
+        assertEquals(OrderStatus.ASSIGNED, store.getOrder(100L).orElseThrow().status());
+        assertEquals(42L, store.getAssignedDriverId(100L).orElseThrow());
+        assertFalse(store.tryAssignRecovery(100L, 99L));
+    }
+
+    @Test
     void shouldNotAssignOrderTwice() {
         InMemoryOrderStateStore store = new InMemoryOrderStateStore();
         store.addOrder(order());
@@ -62,6 +73,16 @@ class InMemoryOrderStateStoreTest {
         assertFalse(store.tryAssign(100L, 99L));
 
         assertEquals(42L, store.getAssignedDriverId(100L).orElseThrow());
+    }
+
+    @Test
+    void shouldExplicitlyRejectRecoveryAssignmentForNormalOrder() {
+        InMemoryOrderStateStore store = new InMemoryOrderStateStore();
+        store.addOrder(order());
+
+        assertFalse(store.tryAssignRecovery(100L, 42L));
+        assertEquals(OrderStatus.CREATED, store.getOrder(100L).orElseThrow().status());
+        assertTrue(store.getAssignedDriverId(100L).isEmpty());
     }
 
     @Test

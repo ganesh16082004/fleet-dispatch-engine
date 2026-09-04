@@ -41,6 +41,20 @@ public final class InMemoryOrderStateStore implements OrderStateStore {
     }
 
     @Override
+    public boolean tryAssignRecovery(long orderId, long driverId) {
+        validateDriverId(driverId);
+        AtomicBoolean assigned = new AtomicBoolean(false);
+        orders.computeIfPresent(orderId, (id, current) -> {
+            if (current.order().status() != OrderStatus.RECOVERY_REQUIRED) {
+                return current;
+            }
+            assigned.set(true);
+            return new OrderState(withStatus(current.order(), OrderStatus.ASSIGNED), driverId);
+        });
+        return assigned.get();
+    }
+
+    @Override
     public boolean tryOffer(long orderId, long driverId) {
         validateDriverId(driverId);
         AtomicBoolean offered = new AtomicBoolean(false);
