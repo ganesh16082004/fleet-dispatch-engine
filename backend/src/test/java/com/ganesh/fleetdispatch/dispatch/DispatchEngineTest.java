@@ -249,13 +249,25 @@ class DispatchEngineTest {
         orders.addOrder(assigned);
         assertTrue(orders.tryAssign(100L, 10L));
         assigned = orders.getOrder(100L).orElseThrow();
+        assertEquals(10L, orders.getAssignedDriverId(100L).orElseThrow());
 
         InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
         routes.putPlan(10L, DriverRoutePlan.single(assigned));
 
         CandidateSelector selector = new CandidateSelector(drivers, graph());
         Router router = (source, target) -> new Route(List.of(source, target), 2.0, 10.0);
-        DispatchEngine engine = new DispatchEngine(selector, drivers, orders, router, 500.0, 10);
+        DispatchEngine engine = new DispatchEngine(
+                selector,
+                drivers,
+                orders,
+                router,
+                new TravelTimeDispatchCandidateScorer(),
+                500.0,
+                10,
+                500.0,
+                2.0,
+                routes,
+                new RouteInsertionEngine(router, 10_000.0, 10_000.0));
 
         assertTrue(engine.cancelOrder(100L));
         assertEquals(OrderStatus.CANCELLED, orders.getOrder(100L).orElseThrow().status());
@@ -275,6 +287,7 @@ class DispatchEngineTest {
         orders.addOrder(assigned);
         assertTrue(orders.tryAssign(100L, 10L));
         assigned = orders.getOrder(100L).orElseThrow();
+        assertEquals(10L, orders.getAssignedDriverId(100L).orElseThrow());
 
         InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
         routes.putPlan(10L, DriverRoutePlan.single(assigned));
@@ -283,7 +296,18 @@ class DispatchEngineTest {
         Router router = (source, target) -> new Route(List.of(source, target),
                 source.equals(driverB) ? 5.0 : 20.0,
                 100.0);
-        DispatchEngine engine = new DispatchEngine(selector, drivers, orders, router, 500.0, 10);
+        DispatchEngine engine = new DispatchEngine(
+                selector,
+                drivers,
+                orders,
+                router,
+                new TravelTimeDispatchCandidateScorer(),
+                500.0,
+                10,
+                500.0,
+                2.0,
+                routes,
+                new RouteInsertionEngine(router, 10_000.0, 10_000.0));
 
         List<DispatchAssignment> assignments = engine.reassignDriver(10L);
 
