@@ -31,12 +31,6 @@ public final class RedisDriverLocationCache implements DriverLocationCache {
         this(redis, DEFAULT_TTL);
     }
 
-    /** Convenience constructor retained for direct/unit-test construction. */
-    public RedisDriverLocationCache(StringRedisTemplate redis, Duration ttl) {
-        this.redis = Objects.requireNonNull(redis, "redis");
-        this.ttl = validateTtl(ttl);
-    }
-
     @Override
     public void put(long driverId, NodeId node) {
         validateDriverId(driverId);
