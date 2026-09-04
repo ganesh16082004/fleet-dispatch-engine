@@ -44,8 +44,10 @@ public final class OfferCandidateSelector {
     private java.util.Optional<OfferCandidate> toOfferCandidate(
             DriverCandidate candidate,
             Order order) {
-        return router.route(candidate.driver().currentNode(), order.pickupNode())
-                .map(route -> new OfferCandidate(
+        Route route = router.findRoute(candidate.driver().currentNode(), order.pickupNode());
+        return route == null
+                ? java.util.Optional.empty()
+                : java.util.Optional.of(new OfferCandidate(
                         candidate.driver(),
                         route,
                         route.totalTravelTimeSeconds(),
