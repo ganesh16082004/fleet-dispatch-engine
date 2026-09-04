@@ -65,6 +65,118 @@ class RouteInsertionEngineTest {
         assertFalse(engine.evaluate(new NodeId(1), plan, order(4, 4, 5)).isPresent());
     }
 
+    @Test
+    void tighterNewOrderSlaRejectsAnOtherwiseValidInsertion() {
+        Router router = weightedRouter(Map.ofEntries(
+                Map.entry(key(1, 2), 5.0),
+                Map.entry(key(2, 3), 5.0),
+                Map.entry(key(1, 4), 4.0),
+                Map.entry(key(4, 5), 4.0),
+                Map.entry(key(5, 2), 4.0),
+                Map.entry(key(2, 5), 4.0),
+                Map.entry(key(5, 3), 4.0)
+        ));
+        RouteInsertionEngine engine = new RouteInsertionEngine(router, 100.0, 100.0);
+
+        Order first = order(200, 2, 3);
+        Order second = order(201, 4, 5);
+        DriverRoutePlan plan = DriverRoutePlan.single(first);
+
+        assertTrue(engine.evaluate(new NodeId(1), plan, second).isPresent());
+        assertFalse(engine.evaluate(
+                new NodeId(1),
+                plan,
+                second,
+                new DeliveryConstraints(100.0, 6.0)).isPresent());
+    }
+
+    @Test
+    void tighterExistingOrderSlaRejectsRouteThatDelaysCurrentDeliveryTooMuch() {
+        Router router = weightedRouter(Map.ofEntries(
+                Map.entry(key(1, 2), 5.0),
+                Map.entry(key(2, 3), 5.0),
+                Map.entry(key(1, 4), 4.0),
+                Map.entry(key(4, 2), 4.0),
+                Map.entry(key(4, 5), 4.0),
+                Map.entry(key(5, 3), 4.0),
+                Map.entry(key(2, 5), 20.0),
+                Map.entry(key(5, 2), 20.0)
+        ));
+        RouteInsertionEngine engine = new RouteInsertionEngine(router, 100.0, 100.0);
+
+        Order first = order(300, 2, 3);
+        Order second = order(301, 4, 5);
+        DriverRoutePlan plan = DriverRoutePlan.single(first);
+
+        assertTrue(engine.evaluate(new NodeId(1), plan, second).isPresent());
+        assertFalse(engine.evaluate(
+                new NodeId(1),
+                plan,
+                second,
+                new DeliveryConstraints(2.0, 100.0)).isPresent());
+    }
+
+    @Test
+    void explicitSlaCanBeLooserThanEngineDefault() {
+        Router router = weightedRouter(Map.ofEntries(
+                Map.entry(key(1, 2), 5.0),
+                Map.entry(key(2, 3), 5.0),
+                Map.entry(key(1, 4), 4.0),
+                Map.entry(key(4, 2), 4.0),
+                Map.entry(key(4, 5), 4.0),
+                Map.entry(key(5, 3), 4.0),
+                Map.entry(key(2, 5), 20.0),
+                Map.entry(key(5, 2), 20.0)
+        ));
+        RouteInsertionEngine engine = new RouteInsertionEngine(router, 2.0, 10.0);
+
+        Order first = order(400, 2, 3);
+        Order second = order(401, 4, 5);
+        DriverRoutePlan plan = DriverRoutePlan.single(first);
+
+        assertFalse(engine.evaluate(new NodeId(1), plan, second).isPresent());
+        assertTrue(engine.evaluate(
+                new NodeId(1),
+                plan,
+                second,
+                new DeliveryConstraints(100.0, 100.0)).isPresent());
+    }
+
+    @Test
+    void doesNotChangeTheBestInsertionWhenSlaAllowsAllCandidates() {
+        Router router = weightedRouter(Map.ofEntries(
+                Map.entry(key(1, 2), 10.0),
+                Map.entry(key(2, 3), 10.0),
+                Map.entry(key(1, 4), 4.0),
+                Map.entry(key(4, 2), 4.0),
+                Map.entry(key(4, 5), 5.0),
+                Map.entry(key(5, 3), 5.0),
+                Map.entry(key(2, 5), 6.0),
+                Map.entry(key(5, 2), 6.0),
+                Map.entry(key(1, 5), 9.0),
+                Map.entry(key(5, 4), 3.0),
+                Map.entry(key(4, 3), 7.0)
+        ));
+        RouteInsertionEngine engine = new RouteInsertionEngine(router, 5.0, 100.0);
+
+        Order first = order(500, 2, 3);
+        Order second = order(501, 4, 5);
+        DriverRoutePlan plan = DriverRoutePlan.single(first);
+
+        RouteInsertionResult defaultResult = engine.evaluate(new NodeId(1), plan, second).orElseThrow();
+        RouteInsertionResult explicitResult = engine.evaluate(
+                new NodeId(1),
+                plan,
+                second,
+                new DeliveryConstraints(100.0, 1_000.0)).orElseThrow();
+
+        assertEquals(defaultResult.route().nodes(), explicitResult.route().nodes());
+        assertEquals(defaultResult.incrementalTravelTimeSeconds(),
+                explicitResult.incrementalTravelTimeSeconds());
+        assertEquals(defaultResult.incrementalDistanceMeters(),
+                explicitResult.incrementalDistanceMeters());
+    }
+
     private static Order order(long id, long pickup, long dropoff) {
         return new Order(id, new NodeId(pickup), new NodeId(dropoff), id, OrderStatus.ASSIGNED);
     }
