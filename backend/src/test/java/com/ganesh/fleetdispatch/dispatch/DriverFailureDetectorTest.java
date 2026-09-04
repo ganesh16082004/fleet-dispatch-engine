@@ -8,8 +8,13 @@ import com.ganesh.fleetdispatch.graph.Route;
 import com.ganesh.fleetdispatch.routing.Router;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -149,6 +154,78 @@ class DriverFailureDetectorTest {
         assertEquals(20L, orders.getAssignedDriverId(100L).orElseThrow());
         assertEquals(1, queue.size());
         assertTrue(routes.getPlan(10L).isEmpty());
+    }
+
+    @Test
+    void shouldSerializeConcurrentFailureRecoveryForSameDriver() throws Exception {
+        InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
+        drivers.addDriver(new Driver(10L, failedNode, DriverStatus.BUSY));
+        drivers.addDriver(new Driver(20L, replacementNode, DriverStatus.AVAILABLE));
+
+        InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
+        Order order = new Order(100L, pickupNode, dropoffNode, 1L, OrderStatus.CREATED);
+        orders.addOrder(order);
+        assertTrue(orders.tryAssign(100L, 10L));
+        order = orders.getOrder(100L).orElseThrow();
+
+        InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
+        routes.putPlan(10L, DriverRoutePlan.single(order));
+        InMemoryDriverRecoveryQueue queue = new InMemoryDriverRecoveryQueue();
+        InMemoryDriverHeartbeatStore heartbeats = new InMemoryDriverHeartbeatStore();
+        heartbeats.recordHeartbeat(10L, 1L, 1_000L);
+        heartbeats.recordHeartbeat(20L, 1L, 5_500L);
+
+        Router router = (source, target) -> new Route(List.of(source, target), 5.0, 100.0);
+        DispatchEngine engine = new DispatchEngine(
+                new CandidateSelector(drivers, graph()),
+                drivers,
+                orders,
+                router,
+                new TravelTimeDispatchCandidateScorer(),
+                500.0,
+                10,
+                2_000.0,
+                2.0,
+                routes,
+                new RouteInsertionEngine(router, 10_000.0, 10_000.0));
+        PickedUpOrderRecoveryService recovery = new PickedUpOrderRecoveryService(
+                drivers,
+                orders,
+                routes,
+                queue);
+        DriverFailureRecoveryCoordinator coordinator = new DriverFailureRecoveryCoordinator(
+                drivers,
+                recovery,
+                engine,
+                new DeliveryConstraints(300.0, 1_800.0));
+
+        int callers = 8;
+        ExecutorService executor = Executors.newFixedThreadPool(callers);
+        CountDownLatch start = new CountDownLatch(1);
+        List<java.util.concurrent.Future<DriverFailureDetection>> futures = new ArrayList<>();
+        try {
+            for (int i = 0; i < callers; i++) {
+                futures.add(executor.submit(() -> {
+                    start.await();
+                    return coordinator.recover(10L, 6_001L);
+                }));
+            }
+            start.countDown();
+
+            int realRecoveries = 0;
+            for (var future : futures) {
+                DriverFailureDetection detection = future.get(5, TimeUnit.SECONDS);
+                if (detection.assignedOrdersReassigned() > 0 || detection.pickedUpOrdersQueued() > 0) {
+                    realRecoveries++;
+                }
+            }
+
+            assertEquals(1, realRecoveries);
+            assertEquals(20L, orders.getAssignedDriverId(100L).orElseThrow());
+            assertEquals(DriverStatus.OFFLINE, drivers.getDriver(10L).orElseThrow().status());
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @Test
