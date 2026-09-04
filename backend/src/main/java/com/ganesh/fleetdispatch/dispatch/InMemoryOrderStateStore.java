@@ -1,12 +1,10 @@
 package com.ganesh.fleetdispatch.dispatch;
 
-import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 
 /** Concurrent in-memory order state backed by atomic map updates. */
 public final class InMemoryOrderStateStore implements OrderStateStore {
@@ -16,10 +14,7 @@ public final class InMemoryOrderStateStore implements OrderStateStore {
     public void addOrder(Order order) {
         Objects.requireNonNull(order, "order must not be null");
 
-        OrderState previous = orders.putIfAbsent(
-                order.id(),
-                new OrderState(order, null)
-        );
+        OrderState previous = orders.putIfAbsent(order.id(), new OrderState(order, null));
         if (previous != null) {
             throw new IllegalArgumentException("Order already exists: " + order.id());
         }
@@ -33,29 +28,69 @@ public final class InMemoryOrderStateStore implements OrderStateStore {
 
     @Override
     public boolean tryAssign(long orderId, long driverId) {
-        if (driverId < 0) {
-            throw new IllegalArgumentException("driverId must be non-negative");
-        }
-
+        validateDriverId(driverId);
         AtomicBoolean assigned = new AtomicBoolean(false);
         orders.computeIfPresent(orderId, (id, current) -> {
             if (current.order().status() != OrderStatus.CREATED) {
                 return current;
             }
-
             assigned.set(true);
-            Order order = current.order();
-            Order updated = new Order(
-                    order.id(),
-                    order.pickupNode(),
-                    order.dropoffNode(),
-                    order.requestTimestamp(),
-                    OrderStatus.ASSIGNED
-            );
-            return new OrderState(updated, driverId);
+            return new OrderState(withStatus(current.order(), OrderStatus.ASSIGNED), driverId);
         });
-
         return assigned.get();
+    }
+
+    @Override
+    public boolean tryOffer(long orderId, long driverId) {
+        validateDriverId(driverId);
+        AtomicBoolean offered = new AtomicBoolean(false);
+        orders.computeIfPresent(orderId, (id, current) -> {
+            if (current.order().status() != OrderStatus.CREATED) {
+                return current;
+            }
+            offered.set(true);
+            return new OrderState(withStatus(current.order(), OrderStatus.OFFERED), driverId);
+        });
+        return offered.get();
+    }
+
+    @Override
+    public boolean tryAcceptOffer(long orderId, long expectedDriverId) {
+        validateDriverId(expectedDriverId);
+        AtomicBoolean accepted = new AtomicBoolean(false);
+        orders.computeIfPresent(orderId, (id, current) -> {
+            if (current.order().status() != OrderStatus.OFFERED
+                    || !matchesDriver(current, expectedDriverId)) {
+                return current;
+            }
+            accepted.set(true);
+            return new OrderState(withStatus(current.order(), OrderStatus.ASSIGNED), expectedDriverId);
+        });
+        return accepted.get();
+    }
+
+    @Override
+    public boolean tryRejectOffer(long orderId, long expectedDriverId) {
+        return releaseOffer(orderId, expectedDriverId);
+    }
+
+    @Override
+    public boolean tryExpireOffer(long orderId, long expectedDriverId) {
+        return releaseOffer(orderId, expectedDriverId);
+    }
+
+    private boolean releaseOffer(long orderId, long expectedDriverId) {
+        validateDriverId(expectedDriverId);
+        AtomicBoolean released = new AtomicBoolean(false);
+        orders.computeIfPresent(orderId, (id, current) -> {
+            if (current.order().status() != OrderStatus.OFFERED
+                    || !matchesDriver(current, expectedDriverId)) {
+                return current;
+            }
+            released.set(true);
+            return new OrderState(withStatus(current.order(), OrderStatus.CREATED), null);
+        });
+        return released.get();
     }
 
     @Override
@@ -71,19 +106,9 @@ public final class InMemoryOrderStateStore implements OrderStateStore {
             if (current.order().status() != expectedStatus) {
                 return current;
             }
-
             transitioned.set(true);
-            Order order = current.order();
-            Order updated = new Order(
-                    order.id(),
-                    order.pickupNode(),
-                    order.dropoffNode(),
-                    order.requestTimestamp(),
-                    newStatus
-            );
-            return new OrderState(updated, current.assignedDriverId());
+            return new OrderState(withStatus(current.order(), newStatus), current.assignedDriverId());
         });
-
         return transitioned.get();
     }
 
@@ -99,6 +124,25 @@ public final class InMemoryOrderStateStore implements OrderStateStore {
     @Override
     public int size() {
         return orders.size();
+    }
+
+    private static boolean matchesDriver(OrderState state, long driverId) {
+        return state.assignedDriverId() != null && state.assignedDriverId() == driverId;
+    }
+
+    private static Order withStatus(Order order, OrderStatus status) {
+        return new Order(
+                order.id(),
+                order.pickupNode(),
+                order.dropoffNode(),
+                order.requestTimestamp(),
+                status);
+    }
+
+    private static void validateDriverId(long driverId) {
+        if (driverId < 0) {
+            throw new IllegalArgumentException("driverId must be non-negative");
+        }
     }
 
     private record OrderState(Order order, Long assignedDriverId) {
