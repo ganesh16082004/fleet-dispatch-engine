@@ -123,7 +123,19 @@ public final class DispatchEngine {
 
     /** Attempts route consolidation first, then falls back to a fresh driver. */
     public Optional<DispatchAssignment> dispatch(Order order) {
+        return dispatch(
+                order,
+                new DeliveryConstraints(
+                        DEFAULT_MAX_EXISTING_ETA_INCREASE_SECONDS,
+                        DEFAULT_MAX_NEW_ORDER_DELIVERY_ETA_SECONDS));
+    }
+
+    /** Attempts route consolidation first, then falls back to a fresh driver using the supplied SLA constraints. */
+    public Optional<DispatchAssignment> dispatch(
+            Order order,
+            DeliveryConstraints deliveryConstraints) {
         Objects.requireNonNull(order, "order");
+        Objects.requireNonNull(deliveryConstraints, "deliveryConstraints");
         if (order.status() != OrderStatus.CREATED) {
             throw new IllegalArgumentException("Only CREATED orders can be dispatched: " + order.id());
         }
@@ -136,7 +148,10 @@ public final class DispatchEngine {
         driverRouteStore.pruneInactive(orderStateStore);
 
         for (double radius : searchRadii()) {
-            Optional<DispatchAssignment> consolidated = dispatchIntoExistingRoute(order, radius);
+            Optional<DispatchAssignment> consolidated = dispatchIntoExistingRoute(
+                    order,
+                    radius,
+                    deliveryConstraints);
             if (consolidated.isPresent()) {
                 return consolidated;
             }
@@ -150,14 +165,21 @@ public final class DispatchEngine {
         return Optional.empty();
     }
 
-    private Optional<DispatchAssignment> dispatchIntoExistingRoute(Order order, double radius) {
+    private Optional<DispatchAssignment> dispatchIntoExistingRoute(
+            Order order,
+            double radius,
+            DeliveryConstraints deliveryConstraints) {
         List<RouteCandidateSelector.RouteDriverCandidate> candidates = routeCandidateSelector
                 .select(order, radius, maxCandidates);
 
         List<RouteOption> options = new ArrayList<>();
         for (RouteCandidateSelector.RouteDriverCandidate candidate : candidates) {
             routeInsertionEngine
-                    .evaluate(candidate.driver().currentNode(), candidate.plan(), order)
+                    .evaluate(
+                            candidate.driver().currentNode(),
+                            candidate.plan(),
+                            order,
+                            deliveryConstraints)
                     .ifPresent(result -> options.add(new RouteOption(candidate.driver(), result)));
         }
 
@@ -180,7 +202,7 @@ public final class DispatchEngine {
                 }
 
                 Optional<RouteInsertionResult> reevaluated = routeInsertionEngine.evaluate(
-                        currentDriver.currentNode(), currentPlan, order);
+                        currentDriver.currentNode(), currentPlan, order, deliveryConstraints);
                 if (reevaluated.isEmpty()) {
                     continue;
                 }
