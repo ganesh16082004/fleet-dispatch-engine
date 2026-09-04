@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/drivers")
@@ -36,6 +37,11 @@ public class DriverController {
     @GetMapping("/{id}")
     public DriverDocument findById(@PathVariable long id) {
         return driverService.findById(id);
+    }
+
+    @GetMapping("/{id}/location")
+    public Map<String, Object> getLiveLocation(@PathVariable long id) {
+        return driverService.getLiveLocation(id);
     }
 
     @DeleteMapping("/{id}")
