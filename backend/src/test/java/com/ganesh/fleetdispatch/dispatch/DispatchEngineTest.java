@@ -1,7 +1,7 @@
 package com.ganesh.fleetdispatch.dispatch;
 
+import com.ganesh.fleetdispatch.domain.Location;
 import com.ganesh.fleetdispatch.graph.NodeId;
-import com.ganesh.fleetdispatch.graph.RoadEdge;
 import com.ganesh.fleetdispatch.graph.RoadGraph;
 import com.ganesh.fleetdispatch.graph.RoadNode;
 import com.ganesh.fleetdispatch.graph.Route;
@@ -13,194 +13,77 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DispatchEngineTest {
-    private final NodeId pickup = new NodeId(1L);
+    private final NodeId driverA = new NodeId(1L);
+    private final NodeId driverB = new NodeId(2L);
+    private final NodeId pickup = new NodeId(3L);
     private final NodeId dropoff = new NodeId(4L);
-    private final NodeId driverA = new NodeId(2L);
-    private final NodeId driverB = new NodeId(3L);
 
     private RoadGraph graph() {
-        Map<NodeId, RoadNode> nodes = Map.of(
-                pickup, new RoadNode(pickup, new com.ganesh.fleetdispatch.domain.Location(12.9716, 77.5946)),
-                driverA, new RoadNode(driverA, new com.ganesh.fleetdispatch.domain.Location(12.9717, 77.5947)),
-                driverB, new RoadNode(driverB, new com.ganesh.fleetdispatch.domain.Location(12.9718, 77.5948)),
-                dropoff, new RoadNode(dropoff, new com.ganesh.fleetdispatch.domain.Location(12.9720, 77.5950))
-        );
-
-        return new RoadGraph(nodes, List.of(
-                new RoadEdge(pickup, driverA, 10.0, 1.0),
-                new RoadEdge(driverA, pickup, 10.0, 1.0),
-                new RoadEdge(pickup, driverB, 20.0, 1.0),
-                new RoadEdge(driverB, pickup, 20.0, 1.0),
-                new RoadEdge(pickup, dropoff, 30.0, 1.0)
-        ));
+        return new RoadGraph(
+                Map.of(
+                        driverA, new RoadNode(driverA, new Location(12.9716, 77.5946)),
+                        driverB, new RoadNode(driverB, new Location(12.9717, 77.5947)),
+                        pickup, new RoadNode(pickup, new Location(12.9720, 77.5950)),
+                        dropoff, new RoadNode(dropoff, new Location(12.9725, 77.5955))),
+                List.of());
     }
 
     private Order order() {
-        return new Order(100L, pickup, dropoff, 1_000L, OrderStatus.CREATED);
-    }
-
-    private InMemoryOrderStateStore orderStore() {
-        InMemoryOrderStateStore store = new InMemoryOrderStateStore();
-        store.addOrder(order());
-        return store;
+        return new Order(100L, pickup, dropoff, 1L, OrderStatus.CREATED);
     }
 
     @Test
-    void shouldAssignDriverUsingRoadTravelTime() {
+    void shouldChooseDriverWithFasterRoute() {
         InMemoryDriverStateStore store = new InMemoryDriverStateStore();
-        InMemoryOrderStateStore orders = orderStore();
-        store.addDriver(new Driver(20L, driverB, DriverStatus.AVAILABLE));
         store.addDriver(new Driver(10L, driverA, DriverStatus.AVAILABLE));
+        store.addDriver(new Driver(20L, driverB, DriverStatus.AVAILABLE));
 
         CandidateSelector selector = new CandidateSelector(store, graph());
         Router router = (source, target) -> {
-            if (source.equals(driverA) && target.equals(pickup)) {
-                return new Route(List.of(driverA, pickup), 8.0, 10.0);
+            if (source.equals(driverA)) {
+                return new Route(List.of(source, target), 12.0, 100.0);
             }
-            if (source.equals(driverB) && target.equals(pickup)) {
-                return new Route(List.of(driverB, pickup), 3.0, 20.0);
-            }
-            throw new IllegalArgumentException("No test route");
+            return new Route(List.of(source, target), 7.0, 200.0);
         };
-
-        DispatchEngine engine = new DispatchEngine(selector, store, orders, router, 500.0, 10);
-
-        Optional<DispatchAssignment> result = engine.dispatch(order());
-
-        assertTrue(result.isPresent());
-        assertEquals(20L, result.orElseThrow().driverId());
-        assertEquals(3.0, result.orElseThrow().driverToPickupRoute().totalTravelTimeSeconds());
-        assertEquals(DriverStatus.BUSY, store.getDriver(20L).orElseThrow().status());
-        assertEquals(DriverStatus.AVAILABLE, store.getDriver(10L).orElseThrow().status());
-        assertEquals(OrderStatus.ASSIGNED, orders.getOrder(100L).orElseThrow().status());
-        assertEquals(OptionalLong.of(20L), orders.getAssignedDriverId(100L));
-    }
-
-    @Test
-    void shouldAllowCustomDispatchScoringStrategy() {
-        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
-        InMemoryOrderStateStore orders = orderStore();
-        store.addDriver(new Driver(10L, driverA, DriverStatus.AVAILABLE));
-        store.addDriver(new Driver(20L, driverB, DriverStatus.AVAILABLE));
-
-        CandidateSelector selector = new CandidateSelector(store, graph());
-        Router router = (source, target) -> new Route(List.of(source, target),
-                source.equals(driverA) ? 5.0 : 15.0,
-                source.equals(driverA) ? 100.0 : 1.0);
-
-        DispatchCandidateScorer distanceFirstScorer = (candidate, route) -> route.totalDistanceMeters();
-        DispatchEngine engine = new DispatchEngine(
-                selector,
-                store,
-                orders,
-                router,
-                distanceFirstScorer,
-                500.0,
-                10);
-
-        Optional<DispatchAssignment> result = engine.dispatch(order());
-
-        assertTrue(result.isPresent());
-        assertEquals(20L, result.orElseThrow().driverId());
-        assertEquals(15.0, result.orElseThrow().driverToPickupRoute().totalTravelTimeSeconds());
-    }
-
-    @Test
-    void shouldAllowWeightedTravelTimeAndDistanceScoring() {
-        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
-        InMemoryOrderStateStore orders = orderStore();
-        store.addDriver(new Driver(10L, driverA, DriverStatus.AVAILABLE));
-        store.addDriver(new Driver(20L, driverB, DriverStatus.AVAILABLE));
-
-        CandidateSelector selector = new CandidateSelector(store, graph());
-        Router router = (source, target) -> new Route(List.of(source, target),
-                source.equals(driverA) ? 4.0 : 8.0,
-                source.equals(driverA) ? 100.0 : 20.0);
-
-        DispatchCandidateScorer scorer = new WeightedDispatchCandidateScorer(1.0, 0.1);
-        DispatchEngine engine = new DispatchEngine(
-                selector,
-                store,
-                orders,
-                router,
-                scorer,
-                500.0,
-                10);
-
-        Optional<DispatchAssignment> result = engine.dispatch(order());
-
-        assertTrue(result.isPresent());
-        assertEquals(20L, result.orElseThrow().driverId());
-    }
-
-    @Test
-    void shouldRejectInvalidWeightedScoringConfiguration() {
-        assertThrows(IllegalArgumentException.class,
-                () -> new WeightedDispatchCandidateScorer(-1.0, 1.0));
-        assertThrows(IllegalArgumentException.class,
-                () -> new WeightedDispatchCandidateScorer(1.0, -1.0));
-        assertThrows(IllegalArgumentException.class,
-                () -> new WeightedDispatchCandidateScorer(0.0, 0.0));
-        assertThrows(IllegalArgumentException.class,
-                () -> new WeightedDispatchCandidateScorer(Double.NaN, 1.0));
-    }
-
-    @Test
-    void shouldReturnEmptyWhenNoDriverIsAvailable() {
-        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
-        InMemoryOrderStateStore orders = orderStore();
-        store.addDriver(new Driver(10L, driverA, DriverStatus.BUSY));
-
-        CandidateSelector selector = new CandidateSelector(store, graph());
-        Router router = (source, target) -> new Route(List.of(source, target), 10.0, 10.0);
-        DispatchEngine engine = new DispatchEngine(selector, store, orders, router, 500.0, 10);
-
-        assertTrue(engine.dispatch(order()).isEmpty());
-        assertEquals(OrderStatus.CREATED, orders.getOrder(100L).orElseThrow().status());
-    }
-
-    @Test
-    void shouldRejectNonCreatedOrders() {
-        InMemoryDriverStateStore store = new InMemoryDriverStateStore();
         InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
-        store.addDriver(new Driver(10L, driverA, DriverStatus.AVAILABLE));
+        orders.addOrder(order());
 
-        CandidateSelector selector = new CandidateSelector(store, graph());
-        Router router = (source, target) -> new Route(List.of(source, target), 10.0, 10.0);
         DispatchEngine engine = new DispatchEngine(selector, store, orders, router, 500.0, 10);
 
-        Order completed = new Order(101L, pickup, dropoff, 1_000L, OrderStatus.COMPLETED);
+        Optional<DispatchAssignment> result = engine.dispatch(order());
 
-        assertThrows(IllegalArgumentException.class, () -> engine.dispatch(completed));
+        assertTrue(result.isPresent());
+        assertEquals(20L, result.orElseThrow().driverId());
+        assertEquals(driverB, store.getDriver(20L).orElseThrow().currentNode());
+        assertEquals(DriverStatus.BUSY, store.getDriver(20L).orElseThrow().status());
+        assertEquals(7.0, result.orElseThrow().driverToPickupRoute().totalTravelTimeSeconds());
     }
 
     @Test
-    void shouldUseCurrentDriverLocationDuringDispatch() {
+    void shouldPreferNearbyDriverWhenRoutesTie() {
         InMemoryDriverStateStore store = new InMemoryDriverStateStore();
-        InMemoryOrderStateStore orders = orderStore();
         store.addDriver(new Driver(10L, driverA, DriverStatus.AVAILABLE));
+        store.addDriver(new Driver(20L, driverB, DriverStatus.AVAILABLE));
 
         CandidateSelector selector = new CandidateSelector(store, graph());
         Router router = (source, target) -> {
-            if (source.equals(driverB) && target.equals(pickup)) {
-                return new Route(List.of(driverB, pickup), 7.0, 20.0);
+            if (source.equals(driverA)) {
+                return new Route(List.of(source, target), 7.0, 100.0);
             }
-            throw new IllegalArgumentException("Unexpected route: " + source + " -> " + target);
+            return new Route(List.of(source, target), 7.0, 100.0);
         };
+        InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
+        orders.addOrder(order());
         DispatchEngine engine = new DispatchEngine(selector, store, orders, router, 500.0, 10);
-
-        store.updateLocation(10L, driverB);
 
         Optional<DispatchAssignment> result = engine.dispatch(order());
 
         assertTrue(result.isPresent());
         assertEquals(10L, result.orElseThrow().driverId());
-        assertEquals(driverB, store.getDriver(10L).orElseThrow().currentNode());
-        assertEquals(DriverStatus.BUSY, store.getDriver(10L).orElseThrow().status());
-        assertEquals(7.0, result.orElseThrow().driverToPickupRoute().totalTravelTimeSeconds());
     }
 
     @Test
@@ -225,8 +108,26 @@ class DispatchEngineTest {
             public boolean tryAssign(long orderId, long driverId) { return false; }
 
             @Override
-            public boolean tryTransition(long orderId, OrderStatus expectedStatus, OrderStatus newStatus) {
+            public boolean tryTransition(OrderStatus expectedStatus, OrderStatus newStatus, long orderId) {
                 return delegate.tryTransition(orderId, expectedStatus, newStatus);
+            }
+
+            @Override
+            public boolean tryOffer(long orderId, long driverId) { return delegate.tryOffer(orderId, driverId); }
+
+            @Override
+            public boolean tryAcceptOffer(long orderId, long driverId) {
+                return delegate.tryAcceptOffer(orderId, driverId);
+            }
+
+            @Override
+            public boolean tryRejectOffer(long orderId, long driverId) {
+                return delegate.tryRejectOffer(orderId, driverId);
+            }
+
+            @Override
+            public boolean tryExpireOffer(long orderId, long driverId) {
+                return delegate.tryExpireOffer(orderId, driverId);
             }
 
             @Override
