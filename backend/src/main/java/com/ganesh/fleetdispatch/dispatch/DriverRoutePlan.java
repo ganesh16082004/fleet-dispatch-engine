@@ -13,7 +13,9 @@ public record DriverRoutePlan(List<Order> activeOrders, List<RouteStop> stops) {
         Objects.requireNonNull(activeOrders, "activeOrders must not be null");
         Objects.requireNonNull(stops, "stops must not be null");
 
-        activeOrders = List.copyOf(activeOrders);
+        activeOrders = activeOrders.stream()
+                .map(DriverRoutePlan::normalizePendingOrder)
+                .toList();
         stops = List.copyOf(stops);
 
         if (activeOrders.size() > MAX_ACTIVE_DELIVERIES) {
@@ -70,22 +72,32 @@ public record DriverRoutePlan(List<Order> activeOrders, List<RouteStop> stops) {
 
     public static DriverRoutePlan single(Order order) {
         Objects.requireNonNull(order, "order");
-        if (order.status() != OrderStatus.ASSIGNED && order.status() != OrderStatus.PICKED_UP) {
-            throw new IllegalArgumentException("Only ASSIGNED and PICKED_UP orders can be routed");
-        }
-
-        return order.status() == OrderStatus.PICKED_UP
+        Order routeOrder = normalizePendingOrder(order);
+        return routeOrder.status() == OrderStatus.PICKED_UP
                 ? new DriverRoutePlan(
-                List.of(order),
-                List.of(new RouteStop(order.id(), RouteStopType.DROPOFF, order.dropoffNode())))
+                List.of(routeOrder),
+                List.of(new RouteStop(routeOrder.id(), RouteStopType.DROPOFF, routeOrder.dropoffNode())))
                 : new DriverRoutePlan(
-                List.of(order),
+                List.of(routeOrder),
                 List.of(
-                        new RouteStop(order.id(), RouteStopType.PICKUP, order.pickupNode()),
-                        new RouteStop(order.id(), RouteStopType.DROPOFF, order.dropoffNode())));
+                        new RouteStop(routeOrder.id(), RouteStopType.PICKUP, routeOrder.pickupNode()),
+                        new RouteStop(routeOrder.id(), RouteStopType.DROPOFF, routeOrder.dropoffNode())));
     }
 
     public int activeDeliveryCount() {
         return activeOrders.size();
+    }
+
+    private static Order normalizePendingOrder(Order order) {
+        Objects.requireNonNull(order, "activeOrders must not contain null");
+        if (order.status() != OrderStatus.CREATED) {
+            return order;
+        }
+        return new Order(
+                order.id(),
+                order.pickupNode(),
+                order.dropoffNode(),
+                order.requestTimestamp(),
+                OrderStatus.ASSIGNED);
     }
 }
