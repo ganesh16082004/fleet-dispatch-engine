@@ -46,7 +46,7 @@ management:
         enabled: true
       group:
         readiness:
-          include: readinessState,mongo,redis,kafka
+          include: readinessState,mongo,redis
         liveness:
           include: livenessState
 
