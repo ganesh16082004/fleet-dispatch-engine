@@ -3,7 +3,7 @@ package com.ganesh.fleetdispatch.dispatch;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Applies ordered live driver location updates and records their heartbeat. */
+/** Applies live driver location updates ordered by per-driver sequence number. */
 public final class DriverLocationTracker {
     private final DriverStateStore driverStateStore;
     private final DriverHeartbeatStore heartbeatStore;
@@ -16,24 +16,29 @@ public final class DriverLocationTracker {
         this.heartbeatStore = Objects.requireNonNull(heartbeatStore, "heartbeatStore");
     }
 
-    /** Registers the initial heartbeat timestamp for a known driver. */
+    /** Registers a driver before it starts publishing live updates. */
     public void registerDriver(long driverId, long timestampMillis) {
         requireDriver(driverId);
         synchronized (driverLocks.computeIfAbsent(driverId, ignored -> new Object())) {
-            heartbeatStore.recordHeartbeat(driverId, timestampMillis);
+            if (!heartbeatStore.recordHeartbeat(driverId, 0L, timestampMillis)) {
+                throw new IllegalStateException("Driver already has a registered heartbeat: " + driverId);
+            }
         }
     }
 
     /**
-     * Applies a live location update only when its timestamp is newer than the
-     * previously accepted heartbeat for the same driver.
+     * Applies a live location update only when its sequence number is strictly
+     * newer than the previously accepted sequence for the same driver.
      */
     public boolean update(DriverLocationUpdate update) {
         Objects.requireNonNull(update, "update");
         requireDriver(update.driverId());
 
         synchronized (driverLocks.computeIfAbsent(update.driverId(), ignored -> new Object())) {
-            if (!heartbeatStore.recordHeartbeat(update.driverId(), update.timestampMillis())) {
+            if (!heartbeatStore.recordHeartbeat(
+                    update.driverId(),
+                    update.sequenceNumber(),
+                    update.timestampMillis())) {
                 return false;
             }
             driverStateStore.updateLocation(update.driverId(), update.node());
