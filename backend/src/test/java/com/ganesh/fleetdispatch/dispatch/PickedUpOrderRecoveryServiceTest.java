@@ -61,7 +61,7 @@ class PickedUpOrderRecoveryServiceTest {
         InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
         drivers.addDriver(new Driver(10L, driverNode, DriverStatus.BUSY));
 
-        Order order = new Order(100L, pickup, dropoff, 1L, OrderStatus.ASSIGNED);
+        Order order = new Order(100L, pickup, dropoff, 1L, OrderStatus.CREATED);
         InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
         orders.addOrder(order);
         assertTrue(orders.tryAssign(100L, 10L));
@@ -84,5 +84,46 @@ class PickedUpOrderRecoveryServiceTest {
         assertEquals(OrderStatus.ASSIGNED, orders.getOrder(100L).orElseThrow().status());
         assertEquals(10L, orders.getAssignedDriverId(100L).orElseThrow());
         assertEquals(DriverStatus.OFFLINE, drivers.getDriver(10L).orElseThrow().status());
+        assertEquals(100L, routes.getPlan(10L).orElseThrow().activeOrders().get(0).id());
+    }
+
+    @Test
+    void shouldKeepAssignedOrdersWhileRemovingRecoveredPickedUpOrders() {
+        InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
+        drivers.addDriver(new Driver(10L, driverNode, DriverStatus.BUSY));
+
+        Order assigned = new Order(100L, pickup, dropoff, 1L, OrderStatus.CREATED);
+        Order pickedUp = new Order(200L, pickup, dropoff, 2L, OrderStatus.PICKED_UP);
+        InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
+        orders.addOrder(assigned);
+        orders.addOrder(pickedUp);
+        assertTrue(orders.tryAssign(100L, 10L));
+        assigned = orders.getOrder(100L).orElseThrow();
+
+        InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
+        routes.putPlan(10L, new DriverRoutePlan(
+                List.of(assigned, pickedUp),
+                List.of(
+                        new RouteStop(100L, RouteStopType.PICKUP, pickup),
+                        new RouteStop(100L, RouteStopType.DROPOFF, dropoff),
+                        new RouteStop(200L, RouteStopType.PICKUP, pickup),
+                        new RouteStop(200L, RouteStopType.DROPOFF, dropoff))));
+        InMemoryDriverRecoveryQueue queue = new InMemoryDriverRecoveryQueue();
+
+        PickedUpOrderRecoveryService service = new PickedUpOrderRecoveryService(
+                drivers,
+                orders,
+                routes,
+                queue);
+
+        List<DriverRecoveryTask> tasks = service.queuePickedUpOrders(10L, 5_000L);
+
+        assertEquals(1, tasks.size());
+        assertEquals(OrderStatus.ASSIGNED, orders.getOrder(100L).orElseThrow().status());
+        assertEquals(10L, orders.getAssignedDriverId(100L).orElseThrow());
+        assertEquals(OrderStatus.RECOVERY_REQUIRED, orders.getOrder(200L).orElseThrow().status());
+        assertTrue(orders.getAssignedDriverId(200L).isEmpty());
+        assertEquals(List.of(assigned), routes.getPlan(10L).orElseThrow().activeOrders());
+        assertEquals(2, routes.getPlan(10L).orElseThrow().stops().size());
     }
 }
