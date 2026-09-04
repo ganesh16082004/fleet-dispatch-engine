@@ -26,3 +26,8 @@ Thumbs.db
 # Runtime data
 /data/
 /logs/
+
+# Next.js dashboard
+**/node_modules/
+**/.next/
+**/out/
