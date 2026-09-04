@@ -17,13 +17,15 @@ import java.util.function.Function;
 
 /**
  * H3-backed spatial index for available drivers.
- * H3 is used only for coarse candidate discovery; exact distance filtering
- * remains in the dispatch store so correctness does not depend on cell shape.
+ * H3 is used only for coarse candidate discovery; exact spherical distance
+ * filtering and Top-K ordering are performed here so the index preserves the
+ * same radius and candidate semantics as the existing grid implementation.
  */
 final class H3AvailableDriverIndex {
     private static final int RESOLUTION = 9;
     private static final double AVERAGE_EDGE_METERS = 200.786148;
     private static final double SAFETY_FACTOR = 1.5;
+    private static final double EARTH_RADIUS_METERS = 6_371_000.0;
 
     private final RoadGraph roadGraph;
     private final H3Core h3;
@@ -73,6 +75,7 @@ final class H3AvailableDriverIndex {
         long origin = h3.latLngToCell(location.latitude(), location.longitude(), RESOLUTION);
         int ring = Math.max(0, (int) Math.ceil(
                 (radiusMeters * SAFETY_FACTOR) / AVERAGE_EDGE_METERS));
+        double maxHaversineH = haversineHForDistance(radiusMeters);
 
         PriorityQueue<DriverDistance> topK = new PriorityQueue<>(
                 Math.max(1, maxCandidates),
@@ -92,7 +95,15 @@ final class H3AvailableDriverIndex {
                 if (driverLocation == null) {
                     continue;
                 }
+
+                // H3 identifies coarse cells. The exact radius check is still
+                // required because a surrounding H3 cell may extend beyond the
+                // requested search radius.
                 double h = haversineH(location, driverLocation);
+                if (h > maxHaversineH) {
+                    continue;
+                }
+
                 DriverDistance candidate = new DriverDistance(driver, h);
                 if (topK.size() < maxCandidates) {
                     topK.offer(candidate);
@@ -111,6 +122,12 @@ final class H3AvailableDriverIndex {
     private Location locationOf(NodeId nodeId) {
         var node = roadGraph.node(nodeId);
         return node == null ? null : node.location();
+    }
+
+    private static double haversineHForDistance(double distanceMeters) {
+        return Math.pow(
+                Math.sin(distanceMeters / (2.0 * EARTH_RADIUS_METERS)),
+                2.0);
     }
 
     private static double haversineH(Location a, Location b) {
