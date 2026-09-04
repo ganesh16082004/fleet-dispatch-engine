@@ -10,6 +10,7 @@ import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.persistence.DriverDocument;
 import com.ganesh.fleetdispatch.persistence.DriverRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
@@ -32,6 +33,7 @@ public class DriverService {
         this.eventPublisher = eventPublisher;
     }
 
+    @Transactional
     public DriverDocument create(DriverRequest request) {
         if (request.id() < 0 || request.currentNode() < 0) {
             throw new IllegalArgumentException("id and currentNode must be non-negative");
