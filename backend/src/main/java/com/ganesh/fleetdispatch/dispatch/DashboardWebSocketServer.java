@@ -5,7 +5,6 @@ import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
 
 import java.net.InetSocketAddress;
-import java.util.Collection;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -77,9 +76,12 @@ public final class DashboardWebSocketServer extends WebSocketServer implements D
 
     private String snapshot() {
         StringBuilder json = new StringBuilder("{\"type\":\"snapshot\",\"drivers\":[");
-        Collection<Driver> drivers = driverStateStore.getTrackedDriverIdsForDashboard();
         boolean first = true;
-        for (Driver driver : drivers) {
+        for (long driverId : heartbeatStore.getTrackedDriverIds()) {
+            Driver driver = driverStateStore.getDriver(driverId).orElse(null);
+            if (driver == null) {
+                continue;
+            }
             if (!first) {
                 json.append(',');
             }
