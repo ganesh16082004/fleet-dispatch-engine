@@ -5,6 +5,7 @@ public enum OrderStatus {
     OFFERED,
     ASSIGNED,
     PICKED_UP,
+    RECOVERY_REQUIRED,
     COMPLETED,
     CANCELLED
 }
