@@ -44,8 +44,8 @@ class DriverFailureDetectorTest {
         InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
         routes.putPlan(10L, DriverRoutePlan.single(order));
         InMemoryDriverHeartbeatStore heartbeats = new InMemoryDriverHeartbeatStore();
-        heartbeats.recordHeartbeat(10L, 1_000L);
-        heartbeats.recordHeartbeat(20L, 1_000L);
+        heartbeats.recordHeartbeat(10L, 1L, 1_000L);
+        heartbeats.recordHeartbeat(20L, 1L, 1_000L);
 
         CandidateSelector selector = new CandidateSelector(drivers, graph());
         Router router = (source, target) -> new Route(List.of(source, target), 5.0, 100.0);
@@ -90,7 +90,7 @@ class DriverFailureDetectorTest {
         InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
         drivers.addDriver(new Driver(10L, failedNode, DriverStatus.AVAILABLE));
         InMemoryDriverHeartbeatStore heartbeats = new InMemoryDriverHeartbeatStore();
-        heartbeats.recordHeartbeat(10L, 1_000L);
+        heartbeats.recordHeartbeat(10L, 1L, 1_000L);
 
         InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
         Router router = (source, target) -> new Route(List.of(source, target), 1.0, 1.0);
@@ -122,7 +122,7 @@ class DriverFailureDetectorTest {
         InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
         drivers.addDriver(new Driver(10L, failedNode, DriverStatus.AVAILABLE));
         InMemoryDriverHeartbeatStore heartbeats = new InMemoryDriverHeartbeatStore();
-        heartbeats.recordHeartbeat(10L, 1_000L);
+        heartbeats.recordHeartbeat(10L, 1L, 1_000L);
         InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
         InMemoryDriverRecoveryQueue queue = new InMemoryDriverRecoveryQueue();
         InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
