@@ -41,7 +41,7 @@ public class OrderService {
                 OrderStatus.CREATED);
 
         orderStateStore.addOrder(order);
-        save(order);
+        save(order, null);
         return response(order, null, List.of());
     }
 
@@ -61,7 +61,8 @@ public class OrderService {
         Order updated = currentOrder(id);
         Long driverId = assignment.driverId();
         save(updated, driverId);
-        return response(updated, driverId, assignment.route().nodes().stream().map(NodeId::value).toList());
+        return response(updated, driverId,
+                assignment.driverToPickupRoute().nodes().stream().map(NodeId::value).toList());
     }
 
     public OrderResponse cancel(long id) {
@@ -76,10 +77,6 @@ public class OrderService {
     private Order currentOrder(long id) {
         return orderStateStore.getOrder(id)
                 .orElseThrow(() -> new IllegalArgumentException("Order not found: " + id));
-    }
-
-    private void save(Order order) {
-        save(order, null);
     }
 
     private void save(Order order, Long assignedDriverId) {
