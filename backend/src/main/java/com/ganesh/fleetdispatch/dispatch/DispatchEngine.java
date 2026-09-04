@@ -7,12 +7,10 @@ import com.ganesh.fleetdispatch.routing.Router;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** Converts nearby-driver candidates into route-efficient dispatch decisions. */
@@ -120,7 +118,7 @@ public final class DispatchEngine {
         this.routeCandidateSelector = new RouteCandidateSelector(
                 driverStateStore,
                 driverRouteStore,
-                candidateSelectorRoadGraph(candidateSelector));
+                candidateSelector.roadGraph());
     }
 
     /** Attempts route consolidation first, then falls back to a fresh driver. */
@@ -176,6 +174,7 @@ public final class DispatchEngine {
                 Driver currentDriver = driverStateStore.getDriver(driver.id()).orElse(null);
                 DriverRoutePlan currentPlan = driverRouteStore.getPlan(driver.id()).orElse(null);
                 if (currentDriver == null || currentPlan == null
+                        || currentDriver.status() != DriverStatus.BUSY
                         || currentPlan.activeDeliveryCount() >= DEFAULT_MAX_ACTIVE_DELIVERIES) {
                     continue;
                 }
@@ -308,7 +307,6 @@ public final class DispatchEngine {
 
         int[] assignment = minimumCostAssignment(costs);
         List<DispatchAssignment> result = new ArrayList<>();
-        Set<Long> reservedDrivers = new HashSet<>();
 
         for (int i = 0; i < assignment.length; i++) {
             int driverIndex = assignment[i];
@@ -329,7 +327,6 @@ public final class DispatchEngine {
                         .get(order.id())
                         .get(driver.id());
                 if (routed != null && orderStateStore.tryAssign(order.id(), driver.id())) {
-                    reservedDrivers.add(driver.id());
                     driverRouteStore.putPlan(driver.id(), DriverRoutePlan.single(order));
                     result.add(new DispatchAssignment(
                             order.id(),
@@ -485,16 +482,6 @@ public final class DispatchEngine {
             return Optional.of(new RoutedCandidate(candidate, route));
         } catch (IllegalArgumentException ignored) {
             return Optional.empty();
-        }
-    }
-
-    private RoadGraph candidateSelectorRoadGraph(CandidateSelector selector) {
-        try {
-            var field = CandidateSelector.class.getDeclaredField("roadGraph");
-            field.setAccessible(true);
-            return (com.ganesh.fleetdispatch.graph.RoadGraph) field.get(selector);
-        } catch (ReflectiveOperationException exception) {
-            throw new IllegalStateException("Unable to access candidate selector road graph", exception);
         }
     }
 
