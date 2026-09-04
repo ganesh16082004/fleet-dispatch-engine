@@ -4,6 +4,8 @@ import com.ganesh.fleetdispatch.cache.DriverLocationCache;
 import com.ganesh.fleetdispatch.dispatch.Driver;
 import com.ganesh.fleetdispatch.dispatch.DriverStateStore;
 import com.ganesh.fleetdispatch.dispatch.DriverStatus;
+import com.ganesh.fleetdispatch.events.FleetEventPublisher;
+import com.ganesh.fleetdispatch.events.FleetEventType;
 import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.persistence.DriverDocument;
 import com.ganesh.fleetdispatch.persistence.DriverRepository;
@@ -17,14 +19,17 @@ public class DriverService {
     private final DriverRepository driverRepository;
     private final DriverStateStore driverStateStore;
     private final DriverLocationCache driverLocationCache;
+    private final FleetEventPublisher eventPublisher;
 
     public DriverService(
             DriverRepository driverRepository,
             DriverStateStore driverStateStore,
-            DriverLocationCache driverLocationCache) {
+            DriverLocationCache driverLocationCache,
+            FleetEventPublisher eventPublisher) {
         this.driverRepository = driverRepository;
         this.driverStateStore = driverStateStore;
         this.driverLocationCache = driverLocationCache;
+        this.eventPublisher = eventPublisher;
     }
 
     public DriverDocument create(DriverRequest request) {
@@ -35,7 +40,8 @@ public class DriverService {
         NodeId node = new NodeId(request.currentNode());
 
         Driver existing = driverStateStore.getDriver(request.id()).orElse(null);
-        if (existing == null) {
+        boolean reconnecting = existing != null;
+        if (!reconnecting) {
             driverStateStore.addDriver(new Driver(request.id(), node, status));
         } else {
             driverStateStore.updateLocation(request.id(), node);
@@ -43,7 +49,31 @@ public class DriverService {
         }
 
         driverLocationCache.put(request.id(), node);
-        return driverRepository.save(new DriverDocument(request.id(), request.currentNode(), status.name()));
+        DriverDocument saved = driverRepository.save(
+                new DriverDocument(request.id(), request.currentNode(), status.name()));
+
+        String aggregateId = "driver-" + request.id();
+        if (reconnecting) {
+            eventPublisher.publish(
+                    FleetEventType.DRIVER_RECONNECTED,
+                    aggregateId,
+                    "DRIVER",
+                    Map.of("driverId", request.id(), "currentNode", request.currentNode(), "status", status.name()));
+        } else {
+            eventPublisher.publish(
+                    FleetEventType.DRIVER_REGISTERED,
+                    aggregateId,
+                    "DRIVER",
+                    Map.of("driverId", request.id(), "currentNode", request.currentNode(), "status", status.name()));
+        }
+
+        eventPublisher.publish(
+                FleetEventType.DRIVER_LOCATION_UPDATED,
+                aggregateId,
+                "DRIVER",
+                Map.of("driverId", request.id(), "currentNode", request.currentNode()));
+
+        return saved;
     }
 
     public List<DriverDocument> findAll() {
