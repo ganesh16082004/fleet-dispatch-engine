@@ -106,7 +106,6 @@ class PickedUpOrderRecoveryServiceTest {
                 List.of(
                         new RouteStop(100L, RouteStopType.PICKUP, pickup),
                         new RouteStop(100L, RouteStopType.DROPOFF, dropoff),
-                        new RouteStop(200L, RouteStopType.PICKUP, pickup),
                         new RouteStop(200L, RouteStopType.DROPOFF, dropoff))));
         InMemoryDriverRecoveryQueue queue = new InMemoryDriverRecoveryQueue();
 
