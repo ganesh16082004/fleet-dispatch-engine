@@ -40,9 +40,7 @@ public final class DriverLocationTracker {
                 throw new IllegalStateException("Offline driver cannot start a tracking session: " + driverId);
             }
             activeSessions.put(driverId, sessionId);
-            if (!heartbeatStore.recordHeartbeat(driverId, 0L, timestampMillis)) {
-                throw new IllegalStateException("Driver heartbeat timestamp is older than stored state: " + driverId);
-            }
+            heartbeatStore.startSession(driverId, timestampMillis);
         }
     }
 
@@ -58,6 +56,7 @@ public final class DriverLocationTracker {
             UUID activeSession = activeSessions.get(update.driverId());
             if (activeSession == null) {
                 activeSessions.put(update.driverId(), update.sessionId());
+                heartbeatStore.startSession(update.driverId(), update.timestampMillis());
             } else if (!activeSession.equals(update.sessionId())) {
                 return false;
             }
