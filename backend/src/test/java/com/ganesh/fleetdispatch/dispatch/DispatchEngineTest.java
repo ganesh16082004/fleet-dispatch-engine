@@ -108,7 +108,10 @@ class DispatchEngineTest {
             public boolean tryAssign(long orderId, long driverId) { return false; }
 
             @Override
-            public boolean tryTransition(OrderStatus expectedStatus, OrderStatus newStatus, long orderId) {
+            public boolean tryTransition(
+                    long orderId,
+                    OrderStatus expectedStatus,
+                    OrderStatus newStatus) {
                 return delegate.tryTransition(orderId, expectedStatus, newStatus);
             }
 
