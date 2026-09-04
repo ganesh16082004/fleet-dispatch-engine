@@ -2,6 +2,7 @@ package com.ganesh.fleetdispatch.dispatch;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Coordinates the complete failure workflow for one driver. */
 public final class DriverFailureRecoveryCoordinator {
@@ -9,6 +10,7 @@ public final class DriverFailureRecoveryCoordinator {
     private final PickedUpOrderRecoveryService pickedUpRecoveryService;
     private final DispatchEngine dispatchEngine;
     private final DeliveryConstraints deliveryConstraints;
+    private final ConcurrentHashMap<Long, Object> driverLocks = new ConcurrentHashMap<>();
 
     public DriverFailureRecoveryCoordinator(
             DriverStateStore driverStateStore,
@@ -29,24 +31,34 @@ public final class DriverFailureRecoveryCoordinator {
      * Executes the complete recovery workflow for a stale driver.
      *
      * <p>ASSIGNED orders return to normal dispatch while PICKED_UP orders become
-     * explicit recovery work. The underlying state transitions are atomic, so a
-     * repeated invocation cannot assign the same order twice.</p>
+     * explicit recovery work. Recovery for a given driver is serialized so two
+     * detector threads cannot process the same failure simultaneously.</p>
      */
     public DriverFailureDetection recover(long driverId, long nowMillis) {
-        driverStateStore.getDriver(driverId)
-                .orElseThrow(() -> new IllegalArgumentException("Unknown driver: " + driverId));
+        if (driverId < 0) {
+            throw new IllegalArgumentException("driverId must be non-negative");
+        }
         if (nowMillis < 0) {
             throw new IllegalArgumentException("nowMillis must be non-negative");
         }
 
-        List<DriverRecoveryTask> pickedUpTasks = pickedUpRecoveryService
-                .queuePickedUpOrders(driverId, nowMillis);
-        List<DispatchAssignment> reassigned = dispatchEngine
-                .reassignDriver(driverId, deliveryConstraints);
+        Object lock = driverLocks.computeIfAbsent(driverId, ignored -> new Object());
+        synchronized (lock) {
+            Driver driver = driverStateStore.getDriver(driverId)
+                    .orElseThrow(() -> new IllegalArgumentException("Unknown driver: " + driverId));
+            if (driver.status() == DriverStatus.OFFLINE) {
+                return new DriverFailureDetection(driverId, 0, 0);
+            }
 
-        return new DriverFailureDetection(
-                driverId,
-                pickedUpTasks.size(),
-                reassigned.size());
+            List<DriverRecoveryTask> pickedUpTasks = pickedUpRecoveryService
+                    .queuePickedUpOrders(driverId, nowMillis);
+            List<DispatchAssignment> reassigned = dispatchEngine
+                    .reassignDriver(driverId, deliveryConstraints);
+
+            return new DriverFailureDetection(
+                    driverId,
+                    pickedUpTasks.size(),
+                    reassigned.size());
+        }
     }
 }
