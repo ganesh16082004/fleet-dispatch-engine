@@ -113,6 +113,37 @@ public final class InMemoryOrderStateStore implements OrderStateStore {
     }
 
     @Override
+    public boolean tryCancel(long orderId) {
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        orders.computeIfPresent(orderId, (id, current) -> {
+            OrderStatus status = current.order().status();
+            if (status != OrderStatus.CREATED
+                    && status != OrderStatus.ASSIGNED
+                    && status != OrderStatus.PICKED_UP) {
+                return current;
+            }
+            cancelled.set(true);
+            return new OrderState(withStatus(current.order(), OrderStatus.CANCELLED), null);
+        });
+        return cancelled.get();
+    }
+
+    @Override
+    public boolean tryRequeue(long orderId, long expectedDriverId) {
+        validateDriverId(expectedDriverId);
+        AtomicBoolean requeued = new AtomicBoolean(false);
+        orders.computeIfPresent(orderId, (id, current) -> {
+            if (current.order().status() != OrderStatus.ASSIGNED
+                    || !matchesDriver(current, expectedDriverId)) {
+                return current;
+            }
+            requeued.set(true);
+            return new OrderState(withStatus(current.order(), OrderStatus.CREATED), null);
+        });
+        return requeued.get();
+    }
+
+    @Override
     public OptionalLong getAssignedDriverId(long orderId) {
         OrderState state = orders.get(orderId);
         if (state == null || state.assignedDriverId() == null) {
