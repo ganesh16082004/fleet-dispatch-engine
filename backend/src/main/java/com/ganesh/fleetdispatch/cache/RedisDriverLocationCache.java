@@ -23,22 +23,18 @@ public final class RedisDriverLocationCache implements DriverLocationCache {
             StringRedisTemplate redis,
             @Value("${fleet.redis.driver-location-ttl:10m}") Duration ttl) {
         this.redis = Objects.requireNonNull(redis, "redis");
-        this.ttl = Objects.requireNonNull(ttl, "ttl");
-        if (ttl.isZero() || ttl.isNegative()) {
-            throw new IllegalArgumentException("ttl must be positive");
-        }
+        this.ttl = validateTtl(ttl);
     }
 
+    /** Convenience constructor retained for direct/unit-test construction. */
     public RedisDriverLocationCache(StringRedisTemplate redis) {
         this(redis, DEFAULT_TTL);
     }
 
+    /** Convenience constructor retained for direct/unit-test construction. */
     public RedisDriverLocationCache(StringRedisTemplate redis, Duration ttl) {
         this.redis = Objects.requireNonNull(redis, "redis");
-        this.ttl = Objects.requireNonNull(ttl, "ttl");
-        if (ttl.isZero() || ttl.isNegative()) {
-            throw new IllegalArgumentException("ttl must be positive");
-        }
+        this.ttl = validateTtl(ttl);
     }
 
     @Override
@@ -59,6 +55,14 @@ public final class RedisDriverLocationCache implements DriverLocationCache {
     public void remove(long driverId) {
         validateDriverId(driverId);
         redis.delete(key(driverId));
+    }
+
+    private static Duration validateTtl(Duration ttl) {
+        Objects.requireNonNull(ttl, "ttl");
+        if (ttl.isZero() || ttl.isNegative()) {
+            throw new IllegalArgumentException("ttl must be positive");
+        }
+        return ttl;
     }
 
     private static String key(long driverId) {
