@@ -10,10 +10,10 @@ import java.util.UUID;
 @Document(collection = "processed_events")
 public record ProcessedEventDocument(
         @Id String id,
-        UUID eventId,
+        String eventId,
         Instant processedAt
 ) {
     public static ProcessedEventDocument of(UUID eventId) {
-        return new ProcessedEventDocument(eventId.toString(), eventId, Instant.now());
+        return new ProcessedEventDocument(eventId.toString(), eventId.toString(), Instant.now());
     }
 }
