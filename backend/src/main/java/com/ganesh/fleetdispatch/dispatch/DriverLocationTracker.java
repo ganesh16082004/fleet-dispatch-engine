@@ -11,6 +11,7 @@ import java.util.concurrent.CopyOnWriteArraySet;
 public final class DriverLocationTracker {
     private final DriverStateStore driverStateStore;
     private final DriverHeartbeatStore heartbeatStore;
+    private final DomainEventBus eventBus;
     private final ConcurrentHashMap<Long, Object> driverLocks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, UUID> activeSessions = new ConcurrentHashMap<>();
     private final CopyOnWriteArraySet<DriverLocationListener> listeners = new CopyOnWriteArraySet<>();
@@ -18,22 +19,24 @@ public final class DriverLocationTracker {
     public DriverLocationTracker(
             DriverStateStore driverStateStore,
             DriverHeartbeatStore heartbeatStore) {
-        this.driverStateStore = Objects.requireNonNull(driverStateStore, "driverStateStore");
-        this.heartbeatStore = Objects.requireNonNull(heartbeatStore, "heartbeatStore");
+        this(driverStateStore, heartbeatStore, null);
     }
 
-    /** Starts a fresh tracking session for a driver that is not offline. */
+    public DriverLocationTracker(
+            DriverStateStore driverStateStore,
+            DriverHeartbeatStore heartbeatStore,
+            DomainEventBus eventBus) {
+        this.driverStateStore = Objects.requireNonNull(driverStateStore, "driverStateStore");
+        this.heartbeatStore = Objects.requireNonNull(heartbeatStore, "heartbeatStore");
+        this.eventBus = eventBus;
+    }
+
     public UUID registerDriver(long driverId, long timestampMillis) {
         UUID sessionId = UUID.randomUUID();
         registerSession(driverId, sessionId, timestampMillis);
         return sessionId;
     }
 
-    /**
-     * Re-registers a driver after an explicit offline state transition.
-     * The caller supplies the driver's new live node so the driver re-enters the
-     * dispatch pool from its actual reconnect location.
-     */
     public UUID reRegisterDriver(long driverId, NodeId reconnectNode, long timestampMillis) {
         requireDriver(driverId);
         Objects.requireNonNull(reconnectNode, "reconnectNode must not be null");
@@ -93,6 +96,14 @@ public final class DriverLocationTracker {
 
         for (DriverLocationListener listener : listeners) {
             listener.onLocationUpdate(update);
+        }
+        if (eventBus != null) {
+            eventBus.publish(new DriverLocationUpdatedEvent(
+                    update.driverId(),
+                    update.sessionId(),
+                    update.sequenceNumber(),
+                    update.node(),
+                    update.timestampMillis()));
         }
         return true;
     }
