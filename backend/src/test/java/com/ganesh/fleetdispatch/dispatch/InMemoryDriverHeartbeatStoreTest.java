@@ -41,6 +41,18 @@ class InMemoryDriverHeartbeatStoreTest {
     }
 
     @Test
+    void shouldResetSequenceForNewSession() {
+        InMemoryDriverHeartbeatStore store = new InMemoryDriverHeartbeatStore();
+
+        assertTrue(store.recordHeartbeat(10L, 500L, 5_000L));
+        store.startSession(10L, 6_000L);
+
+        assertEquals(0L, store.getLastSequenceNumber(10L).orElseThrow());
+        assertEquals(6_000L, store.getLastHeartbeatMillis(10L).orElseThrow());
+        assertTrue(store.recordHeartbeat(10L, 1L, 6_100L));
+    }
+
+    @Test
     void shouldReturnTrackedDriversSortedById() {
         InMemoryDriverHeartbeatStore store = new InMemoryDriverHeartbeatStore();
         store.recordHeartbeat(30L, 1L, 1L);
