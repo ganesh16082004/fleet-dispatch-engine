@@ -1,6 +1,7 @@
 package com.ganesh.fleetdispatch.dispatch;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -54,13 +55,20 @@ public final class InMemoryDispatchOfferStore implements DispatchOfferStore {
 
     @Override
     public List<DispatchOffer> getPendingOffersForOrder(long orderId) {
+        return getOffersForOrder(orderId).stream()
+                .filter(offer -> offer.status() == DispatchOfferStatus.PENDING)
+                .toList();
+    }
+
+    @Override
+    public List<DispatchOffer> getOffersForOrder(long orderId) {
         List<DispatchOffer> result = new ArrayList<>();
         for (DispatchOffer offer : offers.values()) {
-            if (offer.orderId() == orderId && offer.status() == DispatchOfferStatus.PENDING) {
+            if (offer.orderId() == orderId) {
                 result.add(offer);
             }
         }
-        result.sort(java.util.Comparator.comparingLong(DispatchOffer::offerId));
+        result.sort(Comparator.comparingLong(DispatchOffer::offerId));
         return List.copyOf(result);
     }
 }
