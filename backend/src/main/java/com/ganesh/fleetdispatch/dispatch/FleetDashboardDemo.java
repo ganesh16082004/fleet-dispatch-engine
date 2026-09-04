@@ -2,7 +2,7 @@ package com.ganesh.fleetdispatch.dispatch;
 
 import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.graph.RoadGraph;
-import com.ganesh.fleetdispatch.routing.Route;
+import com.ganesh.fleetdispatch.graph.Route;
 import com.ganesh.fleetdispatch.routing.Router;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -12,10 +12,8 @@ import org.java_websocket.handshake.ServerHandshake;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -56,11 +54,11 @@ public final class FleetDashboardDemo {
         HttpServer httpServer = startDashboardHttpServer();
 
         DispatchEngine dispatchEngine = buildDispatchEngine(drivers);
+        InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
+        InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
+        InMemoryDriverRecoveryQueue recoveryQueue = new InMemoryDriverRecoveryQueue();
         PickedUpOrderRecoveryService recoveryService = new PickedUpOrderRecoveryService(
-                drivers,
-                new InMemoryOrderStateStore(),
-                new InMemoryDriverRouteStore(),
-                new InMemoryDriverRecoveryQueue());
+                drivers, orders, routes, recoveryQueue);
         DriverFailureDetector failureDetector = new DriverFailureDetector(
                 drivers,
                 heartbeats,
@@ -79,14 +77,23 @@ public final class FleetDashboardDemo {
                 1,
                 1,
                 TimeUnit.SECONDS);
+
+        List<WebSocketClient> simulators = connectDriverSimulators();
         scheduler.scheduleAtFixedRate(
-                dashboardServer::broadcastSnapshot,
+                new DriverFleetSimulator(simulators),
                 1,
                 1,
                 TimeUnit.SECONDS);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             scheduler.shutdownNow();
+            for (WebSocketClient simulator : simulators) {
+                try {
+                    simulator.closeBlocking();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             try {
                 locationServer.stop(1_000);
                 dashboardServer.stop(1_000);
@@ -100,6 +107,43 @@ public final class FleetDashboardDemo {
         System.out.println("Location WebSocket: ws://127.0.0.1:" + LOCATION_PORT + "/drivers/{driverId}");
         System.out.println("Dashboard WebSocket: ws://127.0.0.1:" + DASHBOARD_PORT + "/dashboard");
         System.out.println("Driver #4 will intentionally stop publishing after 12 seconds to demonstrate failure detection.");
+    }
+
+    private static List<WebSocketClient> connectDriverSimulators() throws InterruptedException {
+        List<WebSocketClient> clients = DRIVER_IDS.stream()
+                .map(FleetDashboardDemo::createSimulator)
+                .toList();
+        for (WebSocketClient client : clients) {
+            if (!client.connectBlocking(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Could not connect simulated driver WebSocket: " + client.getURI());
+            }
+        }
+        return clients;
+    }
+
+    private static WebSocketClient createSimulator(long driverId) {
+        return new WebSocketClient(URI.create(
+                "ws://127.0.0.1:" + LOCATION_PORT + "/drivers/" + driverId)) {
+            @Override
+            public void onOpen(ServerHandshake handshake) {
+                System.out.println("Simulated driver #" + driverId + " connected");
+            }
+
+            @Override
+            public void onMessage(String message) {
+                // Dashboard and demo output are intentionally kept separate.
+            }
+
+            @Override
+            public void onClose(int code, String reason, boolean remote) {
+                System.out.println("Simulated driver #" + driverId + " closed: " + reason);
+            }
+
+            @Override
+            public void onError(Exception ex) {
+                System.err.println("Simulated driver #" + driverId + " error: " + ex.getMessage());
+            }
+        };
     }
 
     private static DispatchEngine buildDispatchEngine(InMemoryDriverStateStore drivers) {
@@ -124,6 +168,35 @@ public final class FleetDashboardDemo {
         exchange.sendResponseHeaders(200, content.length);
         try (var output = exchange.getResponseBody()) {
             output.write(content);
+        }
+    }
+
+    private static final class DriverFleetSimulator implements Runnable {
+        private final List<WebSocketClient> clients;
+        private long tick;
+
+        private DriverFleetSimulator(List<WebSocketClient> clients) {
+            this.clients = clients;
+        }
+
+        @Override
+        public void run() {
+            long now = System.currentTimeMillis();
+            tick++;
+            for (int i = 0; i < clients.size(); i++) {
+                if (i == 3 && tick >= 12) {
+                    continue;
+                }
+                WebSocketClient client = clients.get(i);
+                if (client.isOpen()) {
+                    long driverId = DRIVER_IDS.get(i);
+                    long sequence = tick;
+                    long nodeId = 101L + ((driverId * 3 + tick) % 24);
+                    client.send("{\"sequenceNumber\":" + sequence
+                            + ",\"nodeId\":" + nodeId
+                            + ",\"timestampMillis\":" + now + "}");
+                }
+            }
         }
     }
 }
