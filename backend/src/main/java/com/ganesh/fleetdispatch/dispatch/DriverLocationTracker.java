@@ -37,11 +37,6 @@ public final class DriverLocationTracker {
                 return false;
             }
             driverStateStore.updateLocation(update.driverId(), update.node());
-            if (driverStateStore.getDriver(update.driverId())
-                    .map(driver -> driver.status() == DriverStatus.OFFLINE)
-                    .orElse(false)) {
-                driverStateStore.updateStatus(update.driverId(), DriverStatus.AVAILABLE);
-            }
             return true;
         }
     }
