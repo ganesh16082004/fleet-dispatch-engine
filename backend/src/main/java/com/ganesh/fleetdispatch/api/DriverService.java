@@ -10,6 +10,7 @@ import com.ganesh.fleetdispatch.persistence.DriverRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class DriverService {
@@ -52,6 +53,19 @@ public class DriverService {
     public DriverDocument findById(long id) {
         return driverRepository.findById(id)
                 .orElseThrow(() -> new DriverNotFoundException(id));
+    }
+
+    public Map<String, Object> getLiveLocation(long id) {
+        return driverLocationCache.get(id)
+                .<Map<String, Object>>map(node -> Map.of(
+                        "driverId", id,
+                        "currentNode", node.value(),
+                        "source", "redis",
+                        "live", true))
+                .orElseGet(() -> Map.of(
+                        "driverId", id,
+                        "source", "redis",
+                        "live", false));
     }
 
     public void delete(long id) {
