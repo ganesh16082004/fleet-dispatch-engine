@@ -45,7 +45,7 @@ class DriverFailureDetectorTest {
         routes.putPlan(10L, DriverRoutePlan.single(order));
         InMemoryDriverHeartbeatStore heartbeats = new InMemoryDriverHeartbeatStore();
         heartbeats.recordHeartbeat(10L, 1L, 1_000L);
-        heartbeats.recordHeartbeat(20L, 1L, 1_000L);
+        heartbeats.recordHeartbeat(20L, 1L, 5_500L);
 
         CandidateSelector selector = new CandidateSelector(drivers, graph());
         Router router = (source, target) -> new Route(List.of(source, target), 5.0, 100.0);
@@ -126,11 +126,12 @@ class DriverFailureDetectorTest {
         InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
         InMemoryDriverRecoveryQueue queue = new InMemoryDriverRecoveryQueue();
         InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
+        Router router = (source, target) -> new Route(List.of(source, target), 1.0, 1.0);
         DispatchEngine engine = new DispatchEngine(
                 new CandidateSelector(drivers, graph()),
                 drivers,
                 orders,
-                (source, target) -> new Route(List.of(source, target), 1.0, 1.0),
+                router,
                 500.0,
                 10);
         PickedUpOrderRecoveryService recovery = new PickedUpOrderRecoveryService(
