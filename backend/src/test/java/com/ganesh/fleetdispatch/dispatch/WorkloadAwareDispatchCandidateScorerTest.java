@@ -32,7 +32,7 @@ class WorkloadAwareDispatchCandidateScorerTest {
         double lightScore = scorer.score(new DriverCandidate(lightlyLoaded, 100.0), ROUTE);
         double heavyScore = scorer.score(new DriverCandidate(heavilyLoaded, 100.0), ROUTE);
 
-        assertEquals(10.0, scorer.assignmentCount(lightlyLoaded.id()));
+        assertEquals(0L, scorer.assignmentCount(lightlyLoaded.id()));
         assertEquals(2L, scorer.assignmentCount(heavilyLoaded.id()));
         assertEquals(10.0, lightScore);
         assertEquals(20.0, heavyScore);
