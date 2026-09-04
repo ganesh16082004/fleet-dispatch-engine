@@ -7,10 +7,12 @@ import java.util.OptionalLong;
 
 /** Detects drivers that have stopped sending heartbeats and starts the correct recovery path. */
 public final class DriverFailureDetector {
+    private static final DeliveryConstraints DEFAULT_RECOVERY_CONSTRAINTS =
+            new DeliveryConstraints(300.0, 1_800.0);
+
     private final DriverStateStore driverStateStore;
     private final DriverHeartbeatStore heartbeatStore;
-    private final PickedUpOrderRecoveryService pickedUpRecoveryService;
-    private final DispatchEngine dispatchEngine;
+    private final DriverFailureRecoveryCoordinator recoveryCoordinator;
     private final long heartbeatTimeoutMillis;
 
     public DriverFailureDetector(
@@ -19,10 +21,25 @@ public final class DriverFailureDetector {
             PickedUpOrderRecoveryService pickedUpRecoveryService,
             DispatchEngine dispatchEngine,
             long heartbeatTimeoutMillis) {
+        this(
+                driverStateStore,
+                heartbeatStore,
+                new DriverFailureRecoveryCoordinator(
+                        driverStateStore,
+                        pickedUpRecoveryService,
+                        dispatchEngine,
+                        DEFAULT_RECOVERY_CONSTRAINTS),
+                heartbeatTimeoutMillis);
+    }
+
+    public DriverFailureDetector(
+            DriverStateStore driverStateStore,
+            DriverHeartbeatStore heartbeatStore,
+            DriverFailureRecoveryCoordinator recoveryCoordinator,
+            long heartbeatTimeoutMillis) {
         this.driverStateStore = Objects.requireNonNull(driverStateStore, "driverStateStore");
         this.heartbeatStore = Objects.requireNonNull(heartbeatStore, "heartbeatStore");
-        this.pickedUpRecoveryService = Objects.requireNonNull(pickedUpRecoveryService, "pickedUpRecoveryService");
-        this.dispatchEngine = Objects.requireNonNull(dispatchEngine, "dispatchEngine");
+        this.recoveryCoordinator = Objects.requireNonNull(recoveryCoordinator, "recoveryCoordinator");
         if (heartbeatTimeoutMillis <= 0) {
             throw new IllegalArgumentException("heartbeatTimeoutMillis must be positive");
         }
@@ -30,8 +47,8 @@ public final class DriverFailureDetector {
     }
 
     /**
-     * Scans all tracked drivers and triggers recovery for drivers whose latest
-     * accepted heartbeat is older than the configured timeout.
+     * Scans all tracked drivers and triggers the complete recovery workflow for
+     * drivers whose latest accepted heartbeat is older than the configured timeout.
      */
     public List<DriverFailureDetection> detect(long nowMillis) {
         if (nowMillis < 0) {
@@ -55,13 +72,7 @@ public final class DriverFailureDetector {
                 continue;
             }
 
-            List<DriverRecoveryTask> recoveryTasks = pickedUpRecoveryService
-                    .queuePickedUpOrders(driverId, nowMillis);
-            List<DispatchAssignment> reassigned = dispatchEngine.reassignDriver(driverId);
-            detections.add(new DriverFailureDetection(
-                    driverId,
-                    recoveryTasks.size(),
-                    reassigned.size()));
+            detections.add(recoveryCoordinator.recover(driverId, nowMillis));
         }
         return List.copyOf(detections);
     }
