@@ -44,21 +44,6 @@ public final class RouteCandidateSelector {
 
         Location pickup = pickupNode.location();
         return routeStore.getActiveDriverIds().stream()
-                .map(routeStore::getPlan)
-                .flatMap(java.util.Optional::stream)
-                .filter(plan -> plan.activeDeliveryCount() < DriverRoutePlan.MAX_ACTIVE_DELIVERIES)
-                .map(plan -> new DriverPlanHolder(plan))
-                .map(holder -> driverStateStore.getDriver(holder.plan().activeOrders().get(0).id()))
-                .findAny()
-                .map(ignored -> selectUsingPlans(pickup, radiusMeters, maxCandidates))
-                .orElseGet(() -> selectUsingPlans(pickup, radiusMeters, maxCandidates));
-    }
-
-    private List<RouteDriverCandidate> selectUsingPlans(
-            Location pickup,
-            double radiusMeters,
-            int maxCandidates) {
-        return routeStore.getActiveDriverIds().stream()
                 .map(driverId -> {
                     DriverRoutePlan plan = routeStore.getPlan(driverId).orElse(null);
                     if (plan == null || plan.activeDeliveryCount() >= DriverRoutePlan.MAX_ACTIVE_DELIVERIES) {
@@ -95,9 +80,6 @@ public final class RouteCandidateSelector {
         double h = sinPhi * sinPhi
                 + Math.cos(phi1) * Math.cos(phi2) * sinLambda * sinLambda;
         return EARTH_RADIUS_METERS * 2.0 * Math.atan2(Math.sqrt(h), Math.sqrt(1.0 - h));
-    }
-
-    private record DriverPlanHolder(DriverRoutePlan plan) {
     }
 
     public record RouteDriverCandidate(
