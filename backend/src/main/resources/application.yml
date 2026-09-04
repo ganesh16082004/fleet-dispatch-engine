@@ -4,9 +4,9 @@ server:
 spring:
   application:
     name: fleet-dispatch-engine
+  mongodb:
+    uri: ${MONGODB_URI}
   data:
-    mongodb:
-      uri: ${MONGODB_URI}
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
