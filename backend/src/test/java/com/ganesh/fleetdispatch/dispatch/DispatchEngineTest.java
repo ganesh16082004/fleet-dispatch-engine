@@ -163,11 +163,13 @@ class DispatchEngineTest {
         Driver driver = new Driver(10L, driverA, DriverStatus.BUSY);
         drivers.addDriver(driver);
 
-        Order existing = new Order(200L, driverB, dropoff, 1L, OrderStatus.ASSIGNED);
+        Order existing = new Order(200L, driverB, dropoff, 1L, OrderStatus.CREATED);
         Order incoming = order();
         InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
         orders.addOrder(existing);
         orders.addOrder(incoming);
+        assertTrue(orders.tryAssign(existing.id(), driver.id()));
+        existing = orders.getOrder(existing.id()).orElseThrow();
 
         InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
         routes.putPlan(10L, DriverRoutePlan.single(existing));
@@ -200,11 +202,13 @@ class DispatchEngineTest {
         Driver driver = new Driver(10L, driverA, DriverStatus.BUSY);
         drivers.addDriver(driver);
 
-        Order existing = new Order(200L, driverB, dropoff, 1L, OrderStatus.ASSIGNED);
+        Order existing = new Order(200L, driverB, dropoff, 1L, OrderStatus.CREATED);
         Order incoming = order();
         InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
         orders.addOrder(existing);
         orders.addOrder(incoming);
+        assertTrue(orders.tryAssign(existing.id(), driver.id()));
+        existing = orders.getOrder(existing.id()).orElseThrow();
 
         InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
         routes.putPlan(10L, DriverRoutePlan.single(existing));
@@ -240,22 +244,22 @@ class DispatchEngineTest {
         Driver driver = new Driver(10L, driverA, DriverStatus.BUSY);
         drivers.addDriver(driver);
 
-        Order assigned = order();
+        Order assigned = new Order(100L, pickup, dropoff, 1L, OrderStatus.CREATED);
         InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
         orders.addOrder(assigned);
-        assertTrue(orders.tryAssign(assigned.id(), driver.id()));
-        Order assignedState = orders.getOrder(assigned.id()).orElseThrow();
+        assertTrue(orders.tryAssign(100L, 10L));
+        assigned = orders.getOrder(100L).orElseThrow();
 
         InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
-        routes.putPlan(10L, DriverRoutePlan.single(assignedState));
+        routes.putPlan(10L, DriverRoutePlan.single(assigned));
 
         CandidateSelector selector = new CandidateSelector(drivers, graph());
         Router router = (source, target) -> new Route(List.of(source, target), 2.0, 10.0);
         DispatchEngine engine = new DispatchEngine(selector, drivers, orders, router, 500.0, 10);
 
-        assertTrue(engine.cancelOrder(assigned.id()));
-        assertEquals(OrderStatus.CANCELLED, orders.getOrder(assigned.id()).orElseThrow().status());
-        assertTrue(orders.getAssignedDriverId(assigned.id()).isEmpty());
+        assertTrue(engine.cancelOrder(100L));
+        assertEquals(OrderStatus.CANCELLED, orders.getOrder(100L).orElseThrow().status());
+        assertTrue(orders.getAssignedDriverId(100L).isEmpty());
         assertEquals(DriverStatus.AVAILABLE, drivers.getDriver(10L).orElseThrow().status());
         assertTrue(routes.getPlan(10L).isEmpty());
     }
@@ -266,14 +270,14 @@ class DispatchEngineTest {
         drivers.addDriver(new Driver(10L, driverA, DriverStatus.BUSY));
         drivers.addDriver(new Driver(20L, driverB, DriverStatus.AVAILABLE));
 
-        Order assigned = order();
+        Order assigned = new Order(100L, pickup, dropoff, 1L, OrderStatus.CREATED);
         InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
         orders.addOrder(assigned);
-        assertTrue(orders.tryAssign(assigned.id(), 10L));
-        Order assignedState = orders.getOrder(assigned.id()).orElseThrow();
+        assertTrue(orders.tryAssign(100L, 10L));
+        assigned = orders.getOrder(100L).orElseThrow();
 
         InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
-        routes.putPlan(10L, DriverRoutePlan.single(assignedState));
+        routes.putPlan(10L, DriverRoutePlan.single(assigned));
 
         CandidateSelector selector = new CandidateSelector(drivers, graph());
         Router router = (source, target) -> new Route(List.of(source, target),
@@ -285,11 +289,11 @@ class DispatchEngineTest {
 
         assertEquals(1, assignments.size());
         assertEquals(20L, assignments.get(0).driverId());
-        assertEquals(OrderStatus.ASSIGNED, orders.getOrder(assigned.id()).orElseThrow().status());
-        assertEquals(20L, orders.getAssignedDriverId(assigned.id()).orElseThrow());
+        assertEquals(OrderStatus.ASSIGNED, orders.getOrder(100L).orElseThrow().status());
+        assertEquals(20L, orders.getAssignedDriverId(100L).orElseThrow());
         assertEquals(DriverStatus.OFFLINE, drivers.getDriver(10L).orElseThrow().status());
         assertTrue(routes.getPlan(10L).isEmpty());
         assertEquals(DriverStatus.BUSY, drivers.getDriver(20L).orElseThrow().status());
-        assertEquals(assigned.id(), routes.getPlan(20L).orElseThrow().activeOrders().get(0).id());
+        assertEquals(100L, routes.getPlan(20L).orElseThrow().activeOrders().get(0).id());
     }
 }
