@@ -1,24 +1,25 @@
 package com.ganesh.fleetdispatch.dispatch;
 
+import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.graph.Route;
-import com.ganesh.fleetdispatch.routing.Router;
 
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 /** Ranks available drivers for offers using actual route travel time and distance. */
 public final class OfferCandidateSelector {
     private final CandidateSelector candidateSelector;
-    private final Router router;
+    private final RouteFinder routeFinder;
     private final int maxCandidates;
 
     public OfferCandidateSelector(
             CandidateSelector candidateSelector,
-            Router router,
+            RouteFinder routeFinder,
             int maxCandidates) {
         this.candidateSelector = Objects.requireNonNull(candidateSelector, "candidateSelector");
-        this.router = Objects.requireNonNull(router, "router");
+        this.routeFinder = Objects.requireNonNull(routeFinder, "routeFinder");
         if (maxCandidates <= 0) {
             throw new IllegalArgumentException("maxCandidates must be positive");
         }
@@ -33,7 +34,7 @@ public final class OfferCandidateSelector {
 
         return candidateSelector.select(order, radiusMeters, maxCandidates).stream()
                 .map(candidate -> toOfferCandidate(candidate, order))
-                .flatMap(java.util.Optional::stream)
+                .flatMap(Optional::stream)
                 .sorted(Comparator
                         .comparingDouble(OfferCandidate::incrementalTravelTimeSeconds)
                         .thenComparingDouble(OfferCandidate::incrementalDistanceMeters)
@@ -41,16 +42,19 @@ public final class OfferCandidateSelector {
                 .toList();
     }
 
-    private java.util.Optional<OfferCandidate> toOfferCandidate(
+    private Optional<OfferCandidate> toOfferCandidate(
             DriverCandidate candidate,
             Order order) {
-        Route route = router.findRoute(candidate.driver().currentNode(), order.pickupNode());
-        return route == null
-                ? java.util.Optional.empty()
-                : java.util.Optional.of(new OfferCandidate(
+        return routeFinder.findRoute(candidate.driver().currentNode(), order.pickupNode())
+                .map(route -> new OfferCandidate(
                         candidate.driver(),
                         route,
                         route.totalTravelTimeSeconds(),
                         route.totalDistanceMeters()));
+    }
+
+    @FunctionalInterface
+    public interface RouteFinder {
+        Optional<Route> findRoute(NodeId source, NodeId target);
     }
 }
