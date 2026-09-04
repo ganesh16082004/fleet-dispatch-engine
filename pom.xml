@@ -16,6 +16,8 @@
         <junit.version>5.13.4</junit.version>
         <jmh.version>1.37</jmh.version>
         <h3.version>4.5.0</h3.version>
+        <java.websocket.version>1.6.0</java.websocket.version>
+        <jackson.version>2.21.5</jackson.version>
         <maven.compiler.parameters>true</maven.compiler.parameters>
     </properties>
 
@@ -40,6 +42,16 @@
             <groupId>com.uber</groupId>
             <artifactId>h3</artifactId>
             <version>${h3.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.java-websocket</groupId>
+            <artifactId>Java-WebSocket</artifactId>
+            <version>${java.websocket.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
         </dependency>
     </dependencies>
 
