@@ -13,18 +13,27 @@ public final class RouteExecutionService {
     private final DriverStateStore driverStateStore;
     private final OrderStateStore orderStateStore;
     private final DriverRouteStore driverRouteStore;
+    private final DomainEventBus eventBus;
     private final ConcurrentHashMap<Long, Object> driverLocks = new ConcurrentHashMap<>();
 
     public RouteExecutionService(
             DriverStateStore driverStateStore,
             OrderStateStore orderStateStore,
             DriverRouteStore driverRouteStore) {
+        this(driverStateStore, orderStateStore, driverRouteStore, null);
+    }
+
+    public RouteExecutionService(
+            DriverStateStore driverStateStore,
+            OrderStateStore orderStateStore,
+            DriverRouteStore driverRouteStore,
+            DomainEventBus eventBus) {
         this.driverStateStore = Objects.requireNonNull(driverStateStore, "driverStateStore");
         this.orderStateStore = Objects.requireNonNull(orderStateStore, "orderStateStore");
         this.driverRouteStore = Objects.requireNonNull(driverRouteStore, "driverRouteStore");
+        this.eventBus = eventBus;
     }
 
-    /** Marks an assigned order picked up and removes its pickup stop from the active route. */
     public boolean markPickedUp(long orderId, long driverId) {
         validateIds(orderId, driverId);
         synchronized (driverLocks.computeIfAbsent(driverId, ignored -> new Object())) {
@@ -35,11 +44,11 @@ public final class RouteExecutionService {
 
             Order pickedUp = orderStateStore.getOrder(orderId).orElse(order);
             updateRouteAfterPickup(driverId, pickedUp);
+            publish(new OrderPickedUpEvent(orderId, driverId, System.currentTimeMillis()));
             return true;
         }
     }
 
-    /** Marks a picked-up order completed and removes it from the driver's active route. */
     public boolean completeOrder(long orderId, long driverId) {
         validateIds(orderId, driverId);
         synchronized (driverLocks.computeIfAbsent(driverId, ignored -> new Object())) {
@@ -52,22 +61,17 @@ public final class RouteExecutionService {
             if (driverRouteStore.getPlan(driverId).isEmpty()) {
                 driverStateStore.updateStatus(driverId, DriverStatus.AVAILABLE);
             }
+            publish(new OrderCompletedEvent(orderId, driverId, System.currentTimeMillis()));
             return true;
         }
     }
 
-    /** Returns the driver's current next stop, if any. */
     public Optional<RouteStop> nextStop(long driverId) {
         validateDriverId(driverId);
         return driverRouteStore.getPlan(driverId)
                 .flatMap(plan -> plan.stops().stream().findFirst());
     }
 
-    /**
-     * Completes the driver's current route stop after the caller has verified arrival.
-     * PICKUP stops advance an order to PICKED_UP; HANDOFF stops are treated as the
-     * transition into the existing picked-up order; DROPOFF stops complete the order.
-     */
     public boolean completeCurrentStop(long driverId, NodeId arrivedNode) {
         validateDriverId(driverId);
         Objects.requireNonNull(arrivedNode, "arrivedNode");
@@ -87,11 +91,9 @@ public final class RouteExecutionService {
                 case PICKUP -> markPickedUp(orderIdFrom(currentStop), driverId);
                 case HANDOFF -> {
                     Order order = requireOwnedOrder(orderIdFrom(currentStop), driverId, OrderStatus.ASSIGNED);
-                    yield orderStateStore.tryTransition(
-                            order.id(),
-                            OrderStatus.ASSIGNED,
-                            OrderStatus.PICKED_UP)
-                            && removeStopOnly(driverId, currentStop);
+                    boolean changed = orderStateStore.tryTransition(
+                            order.id(), OrderStatus.ASSIGNED, OrderStatus.PICKED_UP);
+                    yield changed && removeStopOnly(driverId, currentStop);
                 }
                 case DROPOFF -> completeOrder(orderIdFrom(currentStop), driverId);
             };
@@ -106,13 +108,11 @@ public final class RouteExecutionService {
 
         OptionalLongValue assignedDriver = new OptionalLongValue(orderStateStore.getAssignedDriverId(orderId));
         if (!assignedDriver.isPresent() || assignedDriver.getAsLong() != driverId) {
-            throw new IllegalStateException(
-                    "Order " + orderId + " is not assigned to driver " + driverId);
+            throw new IllegalStateException("Order " + orderId + " is not assigned to driver " + driverId);
         }
         if (order.get().status() != expectedStatus) {
             throw new IllegalStateException(
-                    "Order " + orderId + " is " + order.get().status()
-                            + ", expected " + expectedStatus);
+                    "Order " + orderId + " is " + order.get().status() + ", expected " + expectedStatus);
         }
         return order.get();
     }
@@ -124,8 +124,7 @@ public final class RouteExecutionService {
         }
 
         List<RouteStop> remainingStops = plan.stops().stream()
-                .filter(stop -> !(stop.orderId() == pickedUpOrder.id()
-                        && stop.type() == RouteStopType.PICKUP))
+                .filter(stop -> !(stop.orderId() == pickedUpOrder.id() && stop.type() == RouteStopType.PICKUP))
                 .toList();
         List<Order> refreshedOrders = plan.activeOrders().stream()
                 .map(order -> order.id() == pickedUpOrder.id() ? pickedUpOrder : order)
@@ -148,6 +147,7 @@ public final class RouteExecutionService {
                 .map(order -> order.id() == updated.id() ? updated : order)
                 .toList();
         driverRouteStore.putPlan(driverId, new DriverRoutePlan(refreshedOrders, remainingStops));
+        publish(new OrderPickedUpEvent(updated.id(), driverId, System.currentTimeMillis()));
         return true;
     }
 
@@ -162,11 +162,15 @@ public final class RouteExecutionService {
             if (remainingOrders.isEmpty()) {
                 driverRouteStore.remove(driverId);
             } else {
-                driverRouteStore.putPlan(
-                        driverId,
-                        new DriverRoutePlan(remainingOrders, remainingStops));
+                driverRouteStore.putPlan(driverId, new DriverRoutePlan(remainingOrders, remainingStops));
             }
         });
+    }
+
+    private void publish(DomainEvent event) {
+        if (eventBus != null) {
+            eventBus.publish(event);
+        }
     }
 
     private static long orderIdFrom(RouteStop stop) {
@@ -187,12 +191,7 @@ public final class RouteExecutionService {
     }
 
     private record OptionalLongValue(java.util.OptionalLong value) {
-        boolean isPresent() {
-            return value.isPresent();
-        }
-
-        long getAsLong() {
-            return value.getAsLong();
-        }
+        boolean isPresent() { return value.isPresent(); }
+        long getAsLong() { return value.getAsLong(); }
     }
 }
