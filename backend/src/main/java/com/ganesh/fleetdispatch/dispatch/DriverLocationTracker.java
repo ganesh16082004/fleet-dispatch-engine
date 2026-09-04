@@ -20,9 +20,32 @@ public final class DriverLocationTracker {
         this.heartbeatStore = Objects.requireNonNull(heartbeatStore, "heartbeatStore");
     }
 
+    /** Starts a fresh tracking session for a driver that is not offline. */
     public UUID registerDriver(long driverId, long timestampMillis) {
         UUID sessionId = UUID.randomUUID();
         registerSession(driverId, sessionId, timestampMillis);
+        return sessionId;
+    }
+
+    /**
+     * Re-registers a driver after an explicit offline state transition.
+     * The caller supplies the driver's new live node so the driver re-enters the
+     * dispatch pool from its actual reconnect location.
+     */
+    public UUID reRegisterDriver(long driverId, NodeId reconnectNode, long timestampMillis) {
+        requireDriver(driverId);
+        Objects.requireNonNull(reconnectNode, "reconnectNode must not be null");
+        if (timestampMillis < 0) {
+            throw new IllegalArgumentException("timestampMillis must be non-negative");
+        }
+
+        UUID sessionId = UUID.randomUUID();
+        synchronized (driverLocks.computeIfAbsent(driverId, ignored -> new Object())) {
+            driverStateStore.updateLocation(driverId, reconnectNode);
+            driverStateStore.updateStatus(driverId, DriverStatus.AVAILABLE);
+            activeSessions.put(driverId, sessionId);
+            heartbeatStore.startSession(driverId, timestampMillis);
+        }
         return sessionId;
     }
 
