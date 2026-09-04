@@ -6,7 +6,6 @@ import com.ganesh.fleetdispatch.graph.Route;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -103,11 +102,11 @@ public final class DispatchOfferService {
     }
 
     public boolean accept(long offerId) {
-        return withOfferLock(offerId, this::acceptLocked);
+        return withOfferLock(offerId, () -> acceptLocked(offerId));
     }
 
     public boolean reject(long offerId) {
-        return withOfferLock(offerId, this::rejectLocked);
+        return withOfferLock(offerId, () -> rejectLocked(offerId));
     }
 
     public boolean expire(long offerId, long nowMillis) {
