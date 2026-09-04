@@ -3,6 +3,7 @@ package com.ganesh.fleetdispatch.dispatch;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 /** Applies live driver location updates ordered by session and per-driver sequence number. */
 public final class DriverLocationTracker {
@@ -10,6 +11,7 @@ public final class DriverLocationTracker {
     private final DriverHeartbeatStore heartbeatStore;
     private final ConcurrentHashMap<Long, Object> driverLocks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, UUID> activeSessions = new ConcurrentHashMap<>();
+    private final CopyOnWriteArraySet<DriverLocationListener> listeners = new CopyOnWriteArraySet<>();
 
     public DriverLocationTracker(
             DriverStateStore driverStateStore,
@@ -18,14 +20,12 @@ public final class DriverLocationTracker {
         this.heartbeatStore = Objects.requireNonNull(heartbeatStore, "heartbeatStore");
     }
 
-    /** Registers a driver using a newly generated live-tracking session. */
     public UUID registerDriver(long driverId, long timestampMillis) {
         UUID sessionId = UUID.randomUUID();
         registerSession(driverId, sessionId, timestampMillis);
         return sessionId;
     }
 
-    /** Registers an explicit connection session for a known, non-offline driver. */
     public void registerSession(long driverId, UUID sessionId, long timestampMillis) {
         requireDriver(driverId);
         Objects.requireNonNull(sessionId, "sessionId must not be null");
@@ -44,10 +44,6 @@ public final class DriverLocationTracker {
         }
     }
 
-    /**
-     * Applies a live location update only when it belongs to the active session
-     * and its sequence number is strictly newer than the previously accepted one.
-     */
     public boolean update(DriverLocationUpdate update) {
         Objects.requireNonNull(update, "update");
         requireDriver(update.driverId());
@@ -68,11 +64,24 @@ public final class DriverLocationTracker {
                 return false;
             }
             driverStateStore.updateLocation(update.driverId(), update.node());
-            return true;
+        }
+
+        for (DriverLocationListener listener : listeners) {
+            listener.onLocationUpdate(update);
+        }
+        return true;
+    }
+
+    public void addListener(DriverLocationListener listener) {
+        listeners.add(Objects.requireNonNull(listener, "listener"));
+    }
+
+    public void removeListener(DriverLocationListener listener) {
+        if (listener != null) {
+            listeners.remove(listener);
         }
     }
 
-    /** Ends a connection session without changing the driver's availability state. */
     public boolean closeSession(long driverId, UUID sessionId) {
         Objects.requireNonNull(sessionId, "sessionId must not be null");
         synchronized (driverLocks.computeIfAbsent(driverId, ignored -> new Object())) {
