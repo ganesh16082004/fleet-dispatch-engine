@@ -11,11 +11,24 @@ spring:
       url: ${REDIS_URL}
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    properties:
+      security.protocol: ${KAFKA_SECURITY_PROTOCOL:SASL_SSL}
+      sasl.mechanism: ${KAFKA_SASL_MECHANISM:PLAIN}
+      sasl.jaas.config: org.apache.kafka.common.security.plain.PlainLoginModule required username="${KAFKA_API_KEY:}" password="${KAFKA_API_SECRET:}";
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
     consumer:
-      group-id: fleet-dispatch-engine
+      group-id: ${KAFKA_CONSUMER_GROUP:fleet-dispatch-engine}
       auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      missing-topics-fatal: true
 
 fleet:
+  kafka:
+    topic: ${KAFKA_TOPIC:fleet.events}
   redis:
     driver-location-ttl: ${DRIVER_LOCATION_TTL:10m}
 
