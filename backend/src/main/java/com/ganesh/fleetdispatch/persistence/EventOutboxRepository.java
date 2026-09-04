@@ -10,5 +10,7 @@ public interface EventOutboxRepository extends MongoRepository<EventOutboxDocume
     List<EventOutboxDocument> findTop100ByPublishedAtIsNullAndNextAttemptAtLessThanEqualOrderByCreatedAtAsc(
             Instant now);
 
+    List<EventOutboxDocument> findTop100ByOrderByCreatedAtDesc();
+
     Optional<EventOutboxDocument> findByEventId(String eventId);
 }
