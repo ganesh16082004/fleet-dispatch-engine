@@ -31,6 +31,8 @@ fleet:
     topic: ${KAFKA_TOPIC:fleet.events}
   redis:
     driver-location-ttl: ${DRIVER_LOCATION_TTL:10m}
+  api:
+    allowed-origins: ${FLEET_API_ALLOWED_ORIGINS:http://localhost:3000,http://127.0.0.1:3000}
 
 management:
   endpoints:
