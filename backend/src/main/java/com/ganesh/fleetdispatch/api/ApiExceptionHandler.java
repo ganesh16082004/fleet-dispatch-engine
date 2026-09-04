@@ -3,10 +3,10 @@ package com.ganesh.fleetdispatch.api;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
-import org.springframework.http.converter.HttpMessageNotReadableException;
 
 import java.time.Instant;
 
@@ -25,6 +25,13 @@ public class ApiExceptionHandler {
             DriverNotFoundException exception,
             HttpServletRequest request) {
         return error(HttpStatus.NOT_FOUND, exception.getMessage(), request);
+    }
+
+    @ExceptionHandler(OrderConflictException.class)
+    public ResponseEntity<ApiError> handleOrderConflict(
+            OrderConflictException exception,
+            HttpServletRequest request) {
+        return error(HttpStatus.CONFLICT, exception.getMessage(), request);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
