@@ -7,6 +7,8 @@ import com.ganesh.fleetdispatch.dispatch.DriverStatus;
 import com.ganesh.fleetdispatch.dispatch.Order;
 import com.ganesh.fleetdispatch.dispatch.OrderStateStore;
 import com.ganesh.fleetdispatch.dispatch.OrderStatus;
+import com.ganesh.fleetdispatch.events.FleetEventPublisher;
+import com.ganesh.fleetdispatch.events.FleetEventType;
 import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.persistence.DriverDocument;
 import com.ganesh.fleetdispatch.persistence.DriverRepository;
@@ -15,6 +17,7 @@ import com.ganesh.fleetdispatch.persistence.OrderRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class OrderService {
@@ -23,18 +26,21 @@ public class OrderService {
     private final DispatchEngine dispatchEngine;
     private final DriverRepository driverRepository;
     private final DriverStateStore driverStateStore;
+    private final FleetEventPublisher eventPublisher;
 
     public OrderService(
             OrderRepository orderRepository,
             OrderStateStore orderStateStore,
             DispatchEngine dispatchEngine,
             DriverRepository driverRepository,
-            DriverStateStore driverStateStore) {
+            DriverStateStore driverStateStore,
+            FleetEventPublisher eventPublisher) {
         this.orderRepository = orderRepository;
         this.orderStateStore = orderStateStore;
         this.dispatchEngine = dispatchEngine;
         this.driverRepository = driverRepository;
         this.driverStateStore = driverStateStore;
+        this.eventPublisher = eventPublisher;
     }
 
     public OrderResponse create(OrderRequest request) {
@@ -52,6 +58,14 @@ public class OrderService {
 
         orderStateStore.addOrder(order);
         save(order, null);
+        eventPublisher.publish(
+                FleetEventType.ORDER_CREATED,
+                "order-" + order.id(),
+                "ORDER",
+                Map.of(
+                        "orderId", order.id(),
+                        "pickupNode", order.pickupNode().value(),
+                        "dropoffNode", order.dropoffNode().value()));
         return response(order, null, List.of());
     }
 
@@ -73,6 +87,11 @@ public class OrderService {
         long driverId = assignment.driverId();
         persistDriverStatus(driverId, DriverStatus.BUSY);
         save(updated, driverId);
+        eventPublisher.publish(
+                FleetEventType.ORDER_ASSIGNED,
+                "order-" + id,
+                "ORDER",
+                Map.of("orderId", id, "driverId", driverId));
 
         return response(updated, driverId,
                 assignment.driverToPickupRoute().nodes().stream().map(NodeId::value).toList());
@@ -88,6 +107,11 @@ public class OrderService {
 
         Order updated = currentOrder(id);
         save(updated, driverId);
+        eventPublisher.publish(
+                FleetEventType.ORDER_PICKED_UP,
+                "order-" + id,
+                "ORDER",
+                Map.of("orderId", id, "driverId", driverId));
         return response(updated, driverId, List.of());
     }
 
@@ -102,6 +126,11 @@ public class OrderService {
         persistDriverStatus(driverId, DriverStatus.AVAILABLE);
         Order updated = currentOrder(id);
         save(updated, driverId);
+        eventPublisher.publish(
+                FleetEventType.ORDER_COMPLETED,
+                "order-" + id,
+                "ORDER",
+                Map.of("orderId", id, "driverId", driverId));
         return response(updated, driverId, List.of());
     }
 
@@ -118,6 +147,19 @@ public class OrderService {
             persistDriverStatus(assignedDriverId, DriverStatus.AVAILABLE);
         }
         save(updated, null);
+        if (assignedDriverId != null) {
+            eventPublisher.publish(
+                    FleetEventType.ORDER_CANCELLED,
+                    "order-" + id,
+                    "ORDER",
+                    Map.of("orderId", id, "driverId", assignedDriverId));
+        } else {
+            eventPublisher.publish(
+                    FleetEventType.ORDER_CANCELLED,
+                    "order-" + id,
+                    "ORDER",
+                    Map.of("orderId", id));
+        }
         return response(updated, null, List.of());
     }
 
