@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** Converts nearby-driver candidates into route-efficient dispatch decisions. */
@@ -167,9 +168,9 @@ public final class DispatchEngine {
 
     /** Atomically cancels an order and removes it from its driver's route plan. */
     public boolean cancelOrder(long orderId) {
-        OptionalLongWithFallback assignedDriver = findAssignedDriver(orderId);
-        if (assignedDriver.driverId() != null) {
-            long driverId = assignedDriver.driverId();
+        OptionalLong assignedDriver = orderStateStore.getAssignedDriverId(orderId);
+        if (assignedDriver.isPresent()) {
+            long driverId = assignedDriver.getAsLong();
             synchronized (driverDispatchLocks.computeIfAbsent(driverId, ignored -> new Object())) {
                 if (!orderStateStore.tryCancel(orderId)) {
                     return false;
@@ -195,15 +196,26 @@ public final class DispatchEngine {
                 .orElseThrow(() -> new IllegalArgumentException("Unknown driver: " + driverId));
 
         synchronized (driverDispatchLocks.computeIfAbsent(driverId, ignored -> new Object())) {
+            List<Order> routeOrders = driverRouteStore.getPlan(driverId)
+                    .map(DriverRoutePlan::activeOrders)
+                    .orElse(List.of());
+
             driverStateStore.updateStatus(driverId, DriverStatus.OFFLINE);
 
-            List<Order> ordersToReassign = driverRouteStore.getPlan(driverId)
-                    .map(DriverRoutePlan::activeOrders)
-                    .orElse(List.of())
-                    .stream()
-                    .filter(order -> order.status() == OrderStatus.ASSIGNED)
-                    .filter(order -> orderStateStore.tryRequeue(order.id(), driverId))
-                    .toList();
+            List<Order> ordersToReassign = new ArrayList<>();
+            for (Order routeOrder : routeOrders) {
+                Optional<Order> current = orderStateStore.getOrder(routeOrder.id());
+                if (current.isEmpty() || current.get().status() != OrderStatus.ASSIGNED) {
+                    continue;
+                }
+                OptionalLong assignedDriver = orderStateStore.getAssignedDriverId(routeOrder.id());
+                if (assignedDriver.isEmpty() || assignedDriver.getAsLong() != driverId) {
+                    continue;
+                }
+                if (orderStateStore.tryRequeue(routeOrder.id(), driverId)) {
+                    ordersToReassign.add(orderStateStore.getOrder(routeOrder.id()).orElse(routeOrder));
+                }
+            }
 
             driverRouteStore.remove(driverId);
 
@@ -222,13 +234,6 @@ public final class DispatchEngine {
                 new DeliveryConstraints(
                         DEFAULT_MAX_EXISTING_ETA_INCREASE_SECONDS,
                         DEFAULT_MAX_NEW_ORDER_DELIVERY_ETA_SECONDS));
-    }
-
-    private OptionalLongWithFallback findAssignedDriver(long orderId) {
-        java.util.OptionalLong assigned = orderStateStore.getAssignedDriverId(orderId);
-        return assigned.isPresent()
-                ? new OptionalLongWithFallback(assigned.getAsLong())
-                : new OptionalLongWithFallback(null);
     }
 
     private void removeOrderFromRoute(long driverId, long orderId) {
@@ -351,10 +356,6 @@ public final class DispatchEngine {
         return Optional.empty();
     }
 
-    /**
-     * Assigns a batch of CREATED orders using a minimum-cost one-to-one matching.
-     * Existing driver reservation remains the final concurrency guard.
-     */
     public List<DispatchAssignment> dispatchBatch(List<Order> orders) {
         Objects.requireNonNull(orders, "orders");
         if (orders.isEmpty()) {
@@ -500,7 +501,6 @@ public final class DispatchEngine {
         throw new IllegalStateException("Driver missing from batch index: " + driverId);
     }
 
-    /** Hungarian algorithm for minimum-cost rectangular assignment. */
     private int[] minimumCostAssignment(double[][] costs) {
         int rowCount = costs.length;
         int columnCount = costs[0].length;
@@ -604,8 +604,5 @@ public final class DispatchEngine {
     }
 
     private record RouteOption(Driver driver, RouteInsertionResult insertion) {
-    }
-
-    private record OptionalLongWithFallback(Long driverId) {
     }
 }
