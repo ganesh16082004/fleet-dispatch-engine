@@ -5,11 +5,11 @@ import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.graph.RoadGraph;
 import com.ganesh.fleetdispatch.graph.RoadNode;
 import com.ganesh.fleetdispatch.graph.Route;
-import com.ganesh.fleetdispatch.routing.Router;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -31,12 +31,13 @@ class OfferCandidateSelectorTest {
                         PICKUP, new RoadNode(PICKUP, new Location(12.9717, 77.5947))),
                 List.of());
         CandidateSelector selector = new CandidateSelector(drivers, graph);
-        Router router = (source, target) -> source.equals(DRIVER_NEAR)
-                ? new Route(List.of(source, target), 20.0, 100.0)
-                : new Route(List.of(source, target), 8.0, 180.0);
+        OfferCandidateSelector.RouteFinder routeFinder = (source, target) -> Optional.of(
+                source.equals(DRIVER_NEAR)
+                        ? new Route(List.of(source, target), 20.0, 100.0)
+                        : new Route(List.of(source, target), 8.0, 180.0));
 
         Order order = new Order(100L, PICKUP, PICKUP, 1L, OrderStatus.CREATED);
-        OfferCandidateSelector offerSelector = new OfferCandidateSelector(selector, router, 10);
+        OfferCandidateSelector offerSelector = new OfferCandidateSelector(selector, routeFinder, 10);
 
         List<OfferCandidate> candidates = offerSelector.select(order, 2_000.0);
 
@@ -59,12 +60,13 @@ class OfferCandidateSelectorTest {
                         PICKUP, new RoadNode(PICKUP, new Location(12.9717, 77.5947))),
                 List.of());
         CandidateSelector selector = new CandidateSelector(drivers, graph);
-        Router router = (source, target) -> source.equals(DRIVER_NEAR)
-                ? new Route(List.of(source, target), 10.0, 90.0)
-                : new Route(List.of(source, target), 10.0, 120.0);
+        OfferCandidateSelector.RouteFinder routeFinder = (source, target) -> Optional.of(
+                source.equals(DRIVER_NEAR)
+                        ? new Route(List.of(source, target), 10.0, 90.0)
+                        : new Route(List.of(source, target), 10.0, 120.0));
 
         Order order = new Order(101L, PICKUP, PICKUP, 1L, OrderStatus.CREATED);
-        OfferCandidateSelector offerSelector = new OfferCandidateSelector(selector, router, 10);
+        OfferCandidateSelector offerSelector = new OfferCandidateSelector(selector, routeFinder, 10);
 
         List<OfferCandidate> candidates = offerSelector.select(order, 2_000.0);
 
