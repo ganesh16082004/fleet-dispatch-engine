@@ -107,7 +107,10 @@ public final class InMemoryOrderStateStore implements OrderStateStore {
                 return current;
             }
             transitioned.set(true);
-            return new OrderState(withStatus(current.order(), newStatus), current.assignedDriverId());
+            Long assignedDriverId = newStatus == OrderStatus.RECOVERY_REQUIRED
+                    ? null
+                    : current.assignedDriverId();
+            return new OrderState(withStatus(current.order(), newStatus), assignedDriverId);
         });
         return transitioned.get();
     }
