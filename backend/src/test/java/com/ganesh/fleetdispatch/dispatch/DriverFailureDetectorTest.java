@@ -4,7 +4,7 @@ import com.ganesh.fleetdispatch.domain.Location;
 import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.graph.RoadGraph;
 import com.ganesh.fleetdispatch.graph.RoadNode;
-import com.ganesh.fleetdispatch.routing.Route;
+import com.ganesh.fleetdispatch.graph.Route;
 import com.ganesh.fleetdispatch.routing.Router;
 import org.junit.jupiter.api.Test;
 
