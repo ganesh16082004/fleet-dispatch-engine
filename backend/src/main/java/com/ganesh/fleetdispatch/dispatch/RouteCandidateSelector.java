@@ -50,7 +50,7 @@ public final class RouteCandidateSelector {
                         return null;
                     }
                     Driver driver = driverStateStore.getDriver(driverId).orElse(null);
-                    if (driver == null) {
+                    if (driver == null || driver.status() != DriverStatus.BUSY) {
                         return null;
                     }
                     RoadNode driverNode = roadGraph.node(driver.currentNode());
