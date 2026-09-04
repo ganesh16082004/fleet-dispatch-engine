@@ -48,7 +48,7 @@ public class OrderService {
     public OrderResponse create(OrderRequest request) {
         validate(request);
         if (orderStateStore.getOrder(request.id()).isPresent() || orderRepository.existsById(request.id())) {
-            throw new IllegalArgumentException("Order already exists: " + request.id());
+            throw new OrderConflictException("Order already exists: " + request.id());
         }
 
         Order order = new Order(
@@ -77,7 +77,7 @@ public class OrderService {
 
     public OrderDocument findById(long id) {
         return orderRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Order not found: " + id));
+                .orElseThrow(() -> new OrderNotFoundException(id));
     }
 
     @Transactional
@@ -186,7 +186,7 @@ public class OrderService {
 
     private Order currentOrder(long id) {
         return orderStateStore.getOrder(id)
-                .orElseThrow(() -> new IllegalArgumentException("Order not found: " + id));
+                .orElseThrow(() -> new OrderNotFoundException(id));
     }
 
     private void save(Order order, Long assignedDriverId) {
