@@ -34,7 +34,9 @@ public final class EtaEngine {
         if (!Double.isFinite(speedMetersPerSecond) || speedMetersPerSecond <= 0) {
             throw new IllegalArgumentException("speedMetersPerSecond must be positive and finite");
         }
-        return route.totalDistanceMeters() / speedMetersPerSecond + route.totalTravelTimeSeconds() / 2.0;
+        return route.totalTravelTimeSeconds() > 0
+                ? route.totalTravelTimeSeconds()
+                : route.totalDistanceMeters() / speedMetersPerSecond;
     }
 
     public double estimateStopSeconds(Route route, RouteStopType stopType) {
