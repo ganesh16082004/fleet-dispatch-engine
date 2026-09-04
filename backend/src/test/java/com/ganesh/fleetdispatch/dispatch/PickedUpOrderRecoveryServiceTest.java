@@ -34,7 +34,6 @@ class PickedUpOrderRecoveryServiceTest {
         Order order = new Order(100L, pickup, dropoff, 1L, OrderStatus.PICKED_UP);
         InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
         orders.addOrder(order);
-        assertTrue(orders.tryTransition(100L, OrderStatus.PICKED_UP, OrderStatus.PICKED_UP));
 
         InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
         routes.putPlan(10L, DriverRoutePlan.single(order));
@@ -52,6 +51,7 @@ class PickedUpOrderRecoveryServiceTest {
         assertEquals(new DriverRecoveryTask(10L, 100L, driverNode, 5_000L), tasks.get(0));
         assertEquals(1, queue.size());
         assertEquals(OrderStatus.RECOVERY_REQUIRED, orders.getOrder(100L).orElseThrow().status());
+        assertTrue(orders.getAssignedDriverId(100L).isEmpty());
         assertEquals(DriverStatus.OFFLINE, drivers.getDriver(10L).orElseThrow().status());
         assertTrue(routes.getPlan(10L).isEmpty());
     }
@@ -82,6 +82,7 @@ class PickedUpOrderRecoveryServiceTest {
         assertTrue(tasks.isEmpty());
         assertEquals(0, queue.size());
         assertEquals(OrderStatus.ASSIGNED, orders.getOrder(100L).orElseThrow().status());
+        assertEquals(10L, orders.getAssignedDriverId(100L).orElseThrow());
         assertEquals(DriverStatus.OFFLINE, drivers.getDriver(10L).orElseThrow().status());
     }
 }
