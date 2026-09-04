@@ -14,6 +14,7 @@ class DriverRecoveryWorkerTest {
     private final NodeId replacementNear = new NodeId(2L);
     private final NodeId replacementFar = new NodeId(3L);
     private final NodeId handoff = new NodeId(4L);
+    private final NodeId blockedHandoff = new NodeId(7L);
     private final NodeId dropoff = new NodeId(5L);
 
     private RecoveryCandidateSelector.RouteFinder routeFinder() {
@@ -97,6 +98,40 @@ class DriverRecoveryWorkerTest {
         assertTrue(worker.processNext().isEmpty());
         assertEquals(1, queue.size());
         assertEquals(OrderStatus.RECOVERY_REQUIRED, orders.getOrder(100L).orElseThrow().status());
+    }
+
+    @Test
+    void shouldContinueBatchWhenEarlierTaskIsTemporarilyBlocked() {
+        InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
+        drivers.addDriver(new Driver(10L, failedDriverNode, DriverStatus.OFFLINE));
+        drivers.addDriver(new Driver(20L, replacementNear, DriverStatus.AVAILABLE));
+
+        InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
+        orders.addOrder(new Order(100L, new NodeId(6L), dropoff, 1L, OrderStatus.RECOVERY_REQUIRED));
+        orders.addOrder(new Order(200L, new NodeId(6L), dropoff, 2L, OrderStatus.RECOVERY_REQUIRED));
+
+        InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
+        InMemoryDriverRecoveryQueue queue = new InMemoryDriverRecoveryQueue();
+        queue.enqueue(new DriverRecoveryTask(10L, 100L, blockedHandoff, 5_000L));
+        queue.enqueue(new DriverRecoveryTask(10L, 200L, handoff, 5_001L));
+
+        RecoveryCandidateSelector.RouteFinder finder = (source, target) -> {
+            if (source.equals(blockedHandoff)) {
+                return Optional.empty();
+            }
+            return routeFinder().findRoute(source, target);
+        };
+        RecoveryCandidateSelector selector = new RecoveryCandidateSelector(drivers, finder);
+        DriverRecoveryWorker worker = new DriverRecoveryWorker(
+                drivers, orders, routes, queue, selector, finder);
+
+        List<RecoveryAssignment> assignments = worker.processBatch(2);
+
+        assertEquals(1, assignments.size());
+        assertEquals(200L, assignments.get(0).orderId());
+        assertEquals(OrderStatus.RECOVERY_REQUIRED, orders.getOrder(100L).orElseThrow().status());
+        assertEquals(20L, orders.getAssignedDriverId(200L).orElseThrow());
+        assertEquals(1, queue.size());
     }
 
     @Test
