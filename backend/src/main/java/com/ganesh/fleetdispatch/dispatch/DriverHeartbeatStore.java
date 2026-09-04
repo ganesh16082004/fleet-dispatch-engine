@@ -11,13 +11,6 @@ public interface DriverHeartbeatStore {
      */
     boolean recordHeartbeat(long driverId, long sequenceNumber, long heartbeatTimestampMillis);
 
-    /**
-     * Legacy registration helper. Initializes a driver with sequence zero.
-     */
-    default boolean recordHeartbeat(long driverId, long heartbeatTimestampMillis) {
-        return recordHeartbeat(driverId, 0L, heartbeatTimestampMillis);
-    }
-
     OptionalLong getLastHeartbeatMillis(long driverId);
 
     OptionalLong getLastSequenceNumber(long driverId);
