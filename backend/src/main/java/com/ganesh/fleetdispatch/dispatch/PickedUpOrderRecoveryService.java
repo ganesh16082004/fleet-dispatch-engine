@@ -2,10 +2,13 @@ package com.ganesh.fleetdispatch.dispatch;
 
 import com.ganesh.fleetdispatch.graph.NodeId;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /** Moves picked-up deliveries into explicit recovery work when their driver fails. */
 public final class PickedUpOrderRecoveryService {
@@ -42,18 +45,58 @@ public final class PickedUpOrderRecoveryService {
         synchronized (driverLocks.computeIfAbsent(driverId, ignored -> new Object())) {
             driverStateStore.updateStatus(driverId, DriverStatus.OFFLINE);
 
-            List<DriverRecoveryTask> tasks = driverRouteStore.getPlan(driverId)
-                    .map(DriverRoutePlan::activeOrders)
-                    .orElse(List.of())
-                    .stream()
-                    .map(order -> orderStateStore.getOrder(order.id())
-                            .filter(current -> current.status() == OrderStatus.PICKED_UP)
-                            .flatMap(current -> markForRecovery(driverId, current.id(), handoffNode, nowMillis)))
-                    .flatMap(Optional::stream)
+            DriverRoutePlan currentPlan = driverRouteStore.getPlan(driverId).orElse(null);
+            if (currentPlan == null) {
+                return List.of();
+            }
+
+            List<DriverRecoveryTask> tasks = new ArrayList<>();
+            List<Order> remainingOrders = new ArrayList<>();
+
+            for (Order routeOrder : currentPlan.activeOrders()) {
+                Optional<Order> current = orderStateStore.getOrder(routeOrder.id());
+                if (current.isEmpty()) {
+                    continue;
+                }
+
+                Order order = current.get();
+                if (order.status() != OrderStatus.PICKED_UP) {
+                    remainingOrders.add(order);
+                    continue;
+                }
+
+                Optional<DriverRecoveryTask> recoveryTask = markForRecovery(
+                        driverId,
+                        order.id(),
+                        handoffNode,
+                        nowMillis);
+                recoveryTask.ifPresentOrElse(
+                        tasks::add,
+                        () -> {
+                            Order latest = orderStateStore.getOrder(order.id()).orElse(order);
+                            if (latest.status() == OrderStatus.ASSIGNED
+                                    || latest.status() == OrderStatus.PICKED_UP) {
+                                remainingOrders.add(latest);
+                            }
+                        });
+            }
+
+            Set<Long> remainingOrderIds = remainingOrders.stream()
+                    .map(Order::id)
+                    .collect(Collectors.toSet());
+            List<RouteStop> remainingStops = currentPlan.stops().stream()
+                    .filter(stop -> remainingOrderIds.contains(stop.orderId()))
                     .toList();
 
-            driverRouteStore.remove(driverId);
-            return tasks;
+            if (remainingOrders.isEmpty()) {
+                driverRouteStore.remove(driverId);
+            } else {
+                driverRouteStore.putPlan(
+                        driverId,
+                        new DriverRoutePlan(remainingOrders, remainingStops));
+            }
+
+            return List.copyOf(tasks);
         }
     }
 
