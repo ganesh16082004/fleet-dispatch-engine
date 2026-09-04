@@ -10,14 +10,16 @@ public record OrderDocument(
         long pickupNode,
         long dropoffNode,
         long requestTimestamp,
-        String status
+        String status,
+        Long assignedDriverId
 ) {
-    public static OrderDocument from(Order order) {
+    public static OrderDocument from(Order order, Long assignedDriverId) {
         return new OrderDocument(
                 order.id(),
                 order.pickupNode().value(),
                 order.dropoffNode().value(),
                 order.requestTimestamp(),
-                order.status().name());
+                order.status().name(),
+                assignedDriverId);
     }
 }
