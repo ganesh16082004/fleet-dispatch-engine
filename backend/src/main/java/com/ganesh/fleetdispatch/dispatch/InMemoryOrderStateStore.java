@@ -119,7 +119,8 @@ public final class InMemoryOrderStateStore implements OrderStateStore {
             OrderStatus status = current.order().status();
             if (status != OrderStatus.CREATED
                     && status != OrderStatus.ASSIGNED
-                    && status != OrderStatus.PICKED_UP) {
+                    && status != OrderStatus.PICKED_UP
+                    && status != OrderStatus.RECOVERY_REQUIRED) {
                 return current;
             }
             cancelled.set(true);
