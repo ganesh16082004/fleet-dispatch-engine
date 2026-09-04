@@ -12,4 +12,6 @@ public interface DispatchOfferStore {
     boolean transition(long offerId, DispatchOfferStatus expected, DispatchOfferStatus next);
 
     List<DispatchOffer> getPendingOffersForOrder(long orderId);
+
+    List<DispatchOffer> getOffersForOrder(long orderId);
 }
