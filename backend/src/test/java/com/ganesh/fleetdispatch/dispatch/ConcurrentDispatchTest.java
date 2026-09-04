@@ -9,10 +9,12 @@ import com.ganesh.fleetdispatch.routing.Router;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -30,10 +32,11 @@ class ConcurrentDispatchTest {
     private static final NodeId DRIVER_NODE = new NodeId(3L);
 
     @Test
-    void shouldPreventDoubleAssignmentUnderConcurrentDispatch() throws Exception {
+    void shouldRespectThreeActiveDeliveryLimitUnderConcurrentDispatch() throws Exception {
         int driverCount = 20;
         int orderCount = 100;
         int workerCount = 20;
+        int maxActiveDeliveries = DriverRoutePlan.MAX_ACTIVE_DELIVERIES;
 
         InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
         InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
@@ -102,12 +105,26 @@ class ConcurrentDispatchTest {
         assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS));
         assertTrue(failures.isEmpty(), () -> "Concurrent dispatch failures: " + failures);
 
-        assertEquals(driverCount, assignments.size());
+        int expectedAssignments = driverCount * maxActiveDeliveries;
+        assertEquals(expectedAssignments, assignments.size());
 
         Set<Long> assignedDriverIds = assignments.stream()
                 .map(DispatchAssignment::driverId)
                 .collect(Collectors.toSet());
         assertEquals(driverCount, assignedDriverIds.size());
+
+        Map<Long, Long> assignmentsByDriver = assignments.stream()
+                .collect(Collectors.groupingBy(
+                        DispatchAssignment::driverId,
+                        Collectors.counting()));
+
+        for (long driverId : assignedDriverIds) {
+            assertEquals(maxActiveDeliveries, assignmentsByDriver.get(driverId));
+            assertEquals(
+                    DriverStatus.BUSY,
+                    drivers.getDriver(driverId).orElseThrow().status()
+            );
+        }
 
         for (DispatchAssignment assignment : assignments) {
             assertEquals(
@@ -118,15 +135,11 @@ class ConcurrentDispatchTest {
                     OptionalLong.of(assignment.driverId()),
                     orders.getAssignedDriverId(assignment.orderId())
             );
-            assertEquals(
-                    DriverStatus.BUSY,
-                    drivers.getDriver(assignment.driverId()).orElseThrow().status()
-            );
         }
 
         long assignedOrders = pendingOrders.stream()
                 .filter(order -> orders.getOrder(order.id()).orElseThrow().status() == OrderStatus.ASSIGNED)
                 .count();
-        assertEquals(driverCount, assignedOrders);
+        assertEquals(expectedAssignments, assignedOrders);
     }
 }
