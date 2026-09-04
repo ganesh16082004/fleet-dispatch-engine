@@ -65,6 +65,8 @@
 <script>
 const drivers = new Map();
 const positions = new Map();
+const sockets = new Map();
+const sequences = new Map();
 const palette = ['#68d391','#63b3ed','#f6ad55','#f687b3','#b794f4','#4fd1c5','#fbd38d','#fc8181'];
 const map = document.getElementById('map');
 const feed = document.getElementById('feed');
@@ -89,11 +91,33 @@ function render(){
   document.getElementById('active').textContent=active;
   document.getElementById('offline').textContent=offline;
 }
-const ws = new WebSocket('ws://127.0.0.1:8088/dashboard');
-ws.onopen=()=>{document.getElementById('connection').textContent='LIVE'; document.getElementById('connection').className='pill connected'; log('Dashboard stream connected');};
-ws.onclose=()=>{document.getElementById('connection').textContent='DISCONNECTED'; document.getElementById('connection').className='pill disconnected'; log('Dashboard stream disconnected');};
-ws.onerror=()=>log('Dashboard WebSocket error');
-ws.onmessage=e=>{ const m=JSON.parse(e.data); if(m.type==='location'){ const old=drivers.get(m.driverId); drivers.set(m.driverId,{...(old||{}),...m,status:old?.status||'AVAILABLE',lastHeartbeatMillis:m.timestampMillis,sequenceNumber:m.sequenceNumber,nodeId:m.nodeId}); log(`Driver #${m.driverId} → node ${m.nodeId} · seq ${m.sequenceNumber}`); render(); } else if(m.type==='snapshot'){ for(const d of m.drivers) drivers.set(d.driverId,d); render(); } };
+const dashboard = new WebSocket('ws://127.0.0.1:8088/dashboard');
+dashboard.onopen=()=>{document.getElementById('connection').textContent='LIVE'; document.getElementById('connection').className='pill connected'; log('Dashboard stream connected'); startSimulation();};
+dashboard.onclose=()=>{document.getElementById('connection').textContent='DISCONNECTED'; document.getElementById('connection').className='pill disconnected'; log('Dashboard stream disconnected');};
+dashboard.onerror=()=>log('Dashboard WebSocket error');
+dashboard.onmessage=e=>{ const m=JSON.parse(e.data); if(m.type==='location'){ const old=drivers.get(m.driverId)||{}; drivers.set(m.driverId,{...old,driverId:m.driverId,nodeId:m.nodeId,status:old.status||'AVAILABLE',lastHeartbeatMillis:m.timestampMillis,sequenceNumber:m.sequenceNumber}); log(`Driver #${m.driverId} → node ${m.nodeId} · seq ${m.sequenceNumber}`); render(); } else if(m.type==='snapshot'){ for(const d of m.drivers) drivers.set(d.driverId,d); render(); } };
+function connectDriver(driverId){
+  const ws = new WebSocket(`ws://127.0.0.1:8087/drivers/${driverId}`);
+  sockets.set(driverId, ws); sequences.set(driverId, 0);
+  ws.onopen=()=>log(`Driver #${driverId} tracking session connected`);
+  ws.onerror=()=>log(`Driver #${driverId} tracking error`);
+  ws.onclose=()=>log(`Driver #${driverId} tracking session closed`);
+  ws.onmessage=e=>{ try { const m=JSON.parse(e.data); if(m.accepted===false) log(`Driver #${driverId} location rejected`); } catch (_) {} };
+}
+function startSimulation(){
+  for(let id=1;id<=6;id++) connectDriver(id);
+  setInterval(()=>{
+    for(let id=1;id<=6;id++){
+      if(id===4 && performance.now() > window.failDriverAt) continue;
+      const ws=sockets.get(id); if(!ws || ws.readyState!==WebSocket.OPEN) continue;
+      const seq=(sequences.get(id)||0)+1; sequences.set(id,seq);
+      const node=100+id+((seq-1)%18);
+      ws.send(JSON.stringify({sequenceNumber:seq,nodeId:node,timestampMillis:Date.now()}));
+    }
+  },700);
+  window.failDriverAt = performance.now()+12000;
+  log('Simulation started: six live drivers, Driver #4 will stop after 12s');
+}
 </script>
 </body>
 </html>
