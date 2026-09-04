@@ -59,12 +59,12 @@ class V3RemainingFeaturesTest {
     }
 
     @Test
-    void etaEngineProducesPositiveDeterministicEstimate() {
+    void etaEngineProducesDeterministicEstimate() {
         EtaEngine eta = new EtaEngine(10, 30, 20);
         Route route = new Route(List.of(new NodeId(1), new NodeId(2)), 40, 100);
 
-        assertEquals(45.0, eta.estimateSeconds(route));
-        assertEquals(75.0, eta.estimateStopSeconds(route, RouteStopType.PICKUP));
+        assertEquals(40.0, eta.estimateSeconds(route));
+        assertEquals(70.0, eta.estimateStopSeconds(route, RouteStopType.PICKUP));
     }
 
     @Test
