@@ -3,9 +3,11 @@ package com.ganesh.fleetdispatch.dispatch;
 import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.graph.Route;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -54,7 +56,15 @@ public final class DispatchOfferService {
     }
 
     public Optional<DispatchOffer> createOffer(Order order, long nowMillis) {
+        return createOffer(order, nowMillis, Set.of());
+    }
+
+    private Optional<DispatchOffer> createOffer(
+            Order order,
+            long nowMillis,
+            Set<Long> excludedDriverIds) {
         Objects.requireNonNull(order, "order");
+        Objects.requireNonNull(excludedDriverIds, "excludedDriverIds");
         if (nowMillis < 0) {
             throw new IllegalArgumentException("nowMillis must be non-negative");
         }
@@ -69,6 +79,10 @@ public final class DispatchOfferService {
                     .select(order, searchRadiusMeters, maxCandidates);
             for (DriverCandidate candidate : candidates) {
                 Driver driver = candidate.driver();
+                if (excludedDriverIds.contains(driver.id())) {
+                    continue;
+                }
+
                 NodeId expectedNode = driver.currentNode();
                 Optional<Route> route = routerAdapter.findRoute(driver.currentNode(), order.pickupNode());
                 if (route.isEmpty()) {
@@ -98,6 +112,47 @@ public final class DispatchOfferService {
                 return Optional.of(offer);
             }
             return Optional.empty();
+        }
+    }
+
+    /** Re-offers an order only after a rejected or expired offer, excluding prior drivers. */
+    public ReofferResult reOffer(long offerId, long nowMillis) {
+        if (offerId < 0) {
+            throw new IllegalArgumentException("offerId must be non-negative");
+        }
+        if (nowMillis < 0) {
+            throw new IllegalArgumentException("nowMillis must be non-negative");
+        }
+
+        Optional<DispatchOffer> sourceOptional = offerStore.get(offerId);
+        if (sourceOptional.isEmpty()) {
+            return ReofferResult.notEligible();
+        }
+
+        DispatchOffer source = sourceOptional.get();
+        if (source.status() != DispatchOfferStatus.REJECTED
+                && source.status() != DispatchOfferStatus.EXPIRED) {
+            return ReofferResult.notEligible();
+        }
+
+        synchronized (orderLocks.computeIfAbsent(source.orderId(), ignored -> new Object())) {
+            Optional<Order> order = orderStateStore.getOrder(source.orderId());
+            if (order.isEmpty() || order.get().status() != OrderStatus.CREATED) {
+                return ReofferResult.notEligible();
+            }
+
+            if (!offerStore.getPendingOffersForOrder(source.orderId()).isEmpty()) {
+                return ReofferResult.notEligible();
+            }
+
+            Set<Long> excludedDriverIds = new HashSet<>();
+            for (DispatchOffer previous : offerStore.getOffersForOrder(source.orderId())) {
+                excludedDriverIds.add(previous.driverId());
+            }
+
+            return createOffer(order.get(), nowMillis, excludedDriverIds)
+                    .map(ReofferResult::offered)
+                    .orElseGet(ReofferResult::unavailable);
         }
     }
 
