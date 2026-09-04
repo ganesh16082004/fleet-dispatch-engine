@@ -15,6 +15,7 @@ import com.ganesh.fleetdispatch.persistence.DriverRepository;
 import com.ganesh.fleetdispatch.persistence.OrderDocument;
 import com.ganesh.fleetdispatch.persistence.OrderRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
@@ -43,6 +44,7 @@ public class OrderService {
         this.eventPublisher = eventPublisher;
     }
 
+    @Transactional
     public OrderResponse create(OrderRequest request) {
         validate(request);
         if (orderStateStore.getOrder(request.id()).isPresent() || orderRepository.existsById(request.id())) {
@@ -78,6 +80,7 @@ public class OrderService {
                 .orElseThrow(() -> new IllegalArgumentException("Order not found: " + id));
     }
 
+    @Transactional
     public OrderResponse dispatch(long id) {
         Order order = currentOrder(id);
         DispatchAssignment assignment = dispatchEngine.dispatch(order)
@@ -97,6 +100,7 @@ public class OrderService {
                 assignment.driverToPickupRoute().nodes().stream().map(NodeId::value).toList());
     }
 
+    @Transactional
     public OrderResponse pickup(long id) {
         Order order = currentOrder(id);
         long driverId = assignedDriverId(id, order);
@@ -115,6 +119,7 @@ public class OrderService {
         return response(updated, driverId, List.of());
     }
 
+    @Transactional
     public OrderResponse complete(long id) {
         Order order = currentOrder(id);
         long driverId = assignedDriverId(id, order);
@@ -134,6 +139,7 @@ public class OrderService {
         return response(updated, driverId, List.of());
     }
 
+    @Transactional
     public OrderResponse cancel(long id) {
         Long assignedDriverId = orderStateStore.getAssignedDriverId(id).isPresent()
                 ? orderStateStore.getAssignedDriverId(id).getAsLong()
