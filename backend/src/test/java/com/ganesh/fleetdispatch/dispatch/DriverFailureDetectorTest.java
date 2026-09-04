@@ -86,6 +86,72 @@ class DriverFailureDetectorTest {
     }
 
     @Test
+    void shouldRunUnifiedRecoveryForAssignedAndPickedUpOrders() {
+        InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
+        drivers.addDriver(new Driver(10L, failedNode, DriverStatus.BUSY));
+        drivers.addDriver(new Driver(20L, replacementNode, DriverStatus.AVAILABLE));
+
+        InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
+        Order assigned = new Order(100L, pickupNode, dropoffNode, 1L, OrderStatus.CREATED);
+        Order pickedUp = new Order(200L, pickupNode, dropoffNode, 2L, OrderStatus.CREATED);
+        orders.addOrder(assigned);
+        orders.addOrder(pickedUp);
+        assertTrue(orders.tryAssign(100L, 10L));
+        assertTrue(orders.tryAssign(200L, 10L));
+        assertTrue(orders.tryTransition(200L, OrderStatus.ASSIGNED, OrderStatus.PICKED_UP));
+        assigned = orders.getOrder(100L).orElseThrow();
+        pickedUp = orders.getOrder(200L).orElseThrow();
+
+        InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
+        routes.putPlan(
+                10L,
+                new DriverRoutePlan(
+                        List.of(assigned, pickedUp),
+                        List.of(
+                                new RouteStop(100L, RouteStopType.PICKUP, pickupNode),
+                                new RouteStop(100L, RouteStopType.DROPOFF, dropoffNode),
+                                new RouteStop(200L, RouteStopType.PICKUP, pickupNode),
+                                new RouteStop(200L, RouteStopType.DROPOFF, dropoffNode))));
+        InMemoryDriverRecoveryQueue queue = new InMemoryDriverRecoveryQueue();
+        InMemoryDriverHeartbeatStore heartbeats = new InMemoryDriverHeartbeatStore();
+        heartbeats.recordHeartbeat(10L, 1L, 1_000L);
+        heartbeats.recordHeartbeat(20L, 1L, 5_500L);
+
+        Router router = (source, target) -> new Route(List.of(source, target), 5.0, 100.0);
+        DispatchEngine engine = new DispatchEngine(
+                new CandidateSelector(drivers, graph()),
+                drivers,
+                orders,
+                router,
+                new TravelTimeDispatchCandidateScorer(),
+                500.0,
+                10,
+                2_000.0,
+                2.0,
+                routes,
+                new RouteInsertionEngine(router, 10_000.0, 10_000.0));
+        PickedUpOrderRecoveryService recovery = new PickedUpOrderRecoveryService(
+                drivers,
+                orders,
+                routes,
+                queue);
+        DriverFailureRecoveryCoordinator coordinator = new DriverFailureRecoveryCoordinator(
+                drivers,
+                recovery,
+                engine,
+                new DeliveryConstraints(300.0, 1_800.0));
+
+        DriverFailureDetection detection = coordinator.recover(10L, 6_001L);
+
+        assertEquals(1, detection.pickedUpOrdersQueued());
+        assertEquals(1, detection.assignedOrdersReassigned());
+        assertEquals(OrderStatus.RECOVERY_REQUIRED, orders.getOrder(200L).orElseThrow().status());
+        assertEquals(20L, orders.getAssignedDriverId(100L).orElseThrow());
+        assertEquals(1, queue.size());
+        assertTrue(routes.getPlan(10L).isEmpty());
+    }
+
+    @Test
     void shouldNotDetectDriverBeforeHeartbeatTimeout() {
         InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
         drivers.addDriver(new Driver(10L, failedNode, DriverStatus.AVAILABLE));
