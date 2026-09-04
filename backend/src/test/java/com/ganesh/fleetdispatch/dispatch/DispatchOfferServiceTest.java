@@ -73,6 +73,93 @@ class DispatchOfferServiceTest {
         assertFalse(fixture.service().expire(offer.offerId(), offer.expiresAtMillis() + 10_000));
     }
 
+    @Test
+    void rejectedOfferCanBeReOfferedToDifferentDriver() {
+        Fixture fixture = fixture();
+        DispatchOffer first = fixture.service().createOffer(fixture.order(), 1_000L).orElseThrow();
+
+        assertEquals(7L, first.driverId());
+        assertTrue(fixture.service().reject(first.offerId()));
+
+        ReofferResult result = fixture.service().reOffer(first.offerId(), 2_000L);
+
+        assertTrue(result.attempted());
+        DispatchOffer second = result.offer().orElseThrow();
+        assertEquals(8L, second.driverId());
+        assertEquals(OrderStatus.OFFERED, fixture.orders().getOrder(500L).orElseThrow().status());
+        assertEquals(DriverStatus.BUSY, fixture.drivers().getDriver(8L).orElseThrow().status());
+        assertEquals(DispatchOfferStatus.REJECTED,
+                fixture.service().get(first.offerId()).orElseThrow().status());
+    }
+
+    @Test
+    void expiredOfferCanBeReOfferedToDifferentDriver() {
+        Fixture fixture = fixture();
+        DispatchOffer first = fixture.service().createOffer(fixture.order(), 1_000L).orElseThrow();
+
+        assertTrue(fixture.service().expire(first.offerId(), first.expiresAtMillis()));
+
+        ReofferResult result = fixture.service().reOffer(first.offerId(), 10_000L);
+
+        assertTrue(result.attempted());
+        assertEquals(8L, result.offer().orElseThrow().driverId());
+        assertEquals(OrderStatus.OFFERED, fixture.orders().getOrder(500L).orElseThrow().status());
+        assertEquals(DriverStatus.AVAILABLE, fixture.drivers().getDriver(7L).orElseThrow().status());
+        assertEquals(DriverStatus.BUSY, fixture.drivers().getDriver(8L).orElseThrow().status());
+    }
+
+    @Test
+    void repeatedReOffersExcludeEveryPreviouslyOfferedDriver() {
+        Fixture fixture = fixture();
+        DispatchOffer first = fixture.service().createOffer(fixture.order(), 1_000L).orElseThrow();
+        assertEquals(7L, first.driverId());
+        assertTrue(fixture.service().reject(first.offerId()));
+
+        DispatchOffer second = fixture.service().reOffer(first.offerId(), 2_000L).offer().orElseThrow();
+        assertEquals(8L, second.driverId());
+        assertTrue(fixture.service().reject(second.offerId()));
+
+        DispatchOffer third = fixture.service().reOffer(second.offerId(), 3_000L).offer().orElseThrow();
+        assertEquals(9L, third.driverId());
+        assertEquals(DispatchOfferStatus.PENDING,
+                fixture.service().get(third.offerId()).orElseThrow().status());
+    }
+
+    @Test
+    void acceptedOfferCannotTriggerReOffer() {
+        Fixture fixture = fixture();
+        DispatchOffer offer = fixture.service().createOffer(fixture.order(), 1_000L).orElseThrow();
+        assertTrue(fixture.service().accept(offer.offerId()));
+
+        ReofferResult result = fixture.service().reOffer(offer.offerId(), 2_000L);
+
+        assertFalse(result.attempted());
+        assertTrue(result.offer().isEmpty());
+        assertEquals(OrderStatus.ASSIGNED, fixture.orders().getOrder(500L).orElseThrow().status());
+    }
+
+    @Test
+    void reOfferStopsWhenAllDriversHaveAlreadyBeenTried() {
+        Fixture fixture = fixture();
+        DispatchOffer first = fixture.service().createOffer(fixture.order(), 1_000L).orElseThrow();
+        assertTrue(fixture.service().reject(first.offerId()));
+
+        DispatchOffer second = fixture.service().reOffer(first.offerId(), 2_000L).offer().orElseThrow();
+        assertTrue(fixture.service().reject(second.offerId()));
+
+        DispatchOffer third = fixture.service().reOffer(second.offerId(), 3_000L).offer().orElseThrow();
+        assertTrue(fixture.service().reject(third.offerId()));
+
+        ReofferResult exhausted = fixture.service().reOffer(third.offerId(), 4_000L);
+
+        assertTrue(exhausted.attempted());
+        assertTrue(exhausted.offer().isEmpty());
+        assertEquals(OrderStatus.CREATED, fixture.orders().getOrder(500L).orElseThrow().status());
+        assertEquals(DriverStatus.AVAILABLE, fixture.drivers().getDriver(7L).orElseThrow().status());
+        assertEquals(DriverStatus.AVAILABLE, fixture.drivers().getDriver(8L).orElseThrow().status());
+        assertEquals(DriverStatus.AVAILABLE, fixture.drivers().getDriver(9L).orElseThrow().status());
+    }
+
     private Fixture fixture() {
         InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
         InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
@@ -85,9 +172,10 @@ class DispatchOfferServiceTest {
                         DROPOFF, new RoadNode(DROPOFF, new Location(12.9720, 77.5950))),
                 List.of());
 
-        Driver driver = new Driver(7L, DRIVER_NODE, DriverStatus.AVAILABLE);
+        drivers.addDriver(new Driver(7L, DRIVER_NODE, DriverStatus.AVAILABLE));
+        drivers.addDriver(new Driver(8L, DRIVER_NODE, DriverStatus.AVAILABLE));
+        drivers.addDriver(new Driver(9L, DRIVER_NODE, DriverStatus.AVAILABLE));
         Order order = new Order(500L, PICKUP, DROPOFF, 10L, OrderStatus.CREATED);
-        drivers.addDriver(driver);
         orders.addOrder(order);
 
         CandidateSelector selector = new CandidateSelector(drivers, graph);
