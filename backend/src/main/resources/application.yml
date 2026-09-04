@@ -15,6 +15,10 @@ spring:
       group-id: fleet-dispatch-engine
       auto-offset-reset: earliest
 
+fleet:
+  redis:
+    driver-location-ttl: ${DRIVER_LOCATION_TTL:10m}
+
 management:
   endpoints:
     web:
