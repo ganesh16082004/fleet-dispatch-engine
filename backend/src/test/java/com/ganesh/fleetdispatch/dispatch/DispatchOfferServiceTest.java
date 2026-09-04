@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -91,14 +92,14 @@ class DispatchOfferServiceTest {
 
         CandidateSelector selector = new CandidateSelector(drivers, graph);
         DispatchOfferService.RouterAdapter router =
-                (source, target) -> OptionalRoute.of(new Route(List.of(source, target), 10.0, 100.0));
+                (source, target) -> Optional.of(new Route(List.of(source, target), 10.0, 100.0));
 
         DispatchOfferService service = new DispatchOfferService(
                 selector,
                 drivers,
                 orders,
                 routes,
-                router::findRoute,
+                router,
                 new InMemoryDispatchOfferStore(),
                 500.0,
                 10,
@@ -111,21 +112,5 @@ class DispatchOfferServiceTest {
             InMemoryDriverStateStore drivers,
             InMemoryOrderStateStore orders,
             Order order) {
-    }
-
-    private static final class OptionalRoute {
-        private final Route route;
-
-        private OptionalRoute(Route route) {
-            this.route = route;
-        }
-
-        static OptionalRoute of(Route route) {
-            return new OptionalRoute(route);
-        }
-
-        Optional<Route> asOptional() {
-            return Optional.of(route);
-        }
     }
 }
