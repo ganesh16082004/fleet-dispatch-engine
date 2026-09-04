@@ -148,4 +148,81 @@ class DispatchEngineTest {
         assertEquals(DriverStatus.AVAILABLE, drivers.getDriver(10L).orElseThrow().status());
         assertEquals(OrderStatus.CREATED, rejectingOrders.getOrder(100L).orElseThrow().status());
     }
+
+    @Test
+    void shouldBlockRouteConsolidationWhenDispatchSlaIsTooStrict() {
+        InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
+        Driver driver = new Driver(10L, driverA, DriverStatus.BUSY);
+        drivers.addDriver(driver);
+
+        Order existing = new Order(200L, driverB, dropoff, 1L, OrderStatus.ASSIGNED);
+        Order incoming = order();
+        InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
+        orders.addOrder(existing);
+        orders.addOrder(incoming);
+
+        InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
+        routes.putPlan(10L, DriverRoutePlan.single(existing));
+
+        CandidateSelector selector = new CandidateSelector(drivers, graph());
+        Router router = (source, target) -> new Route(List.of(source, target), 10.0, 100.0);
+        DispatchEngine engine = new DispatchEngine(
+                selector,
+                drivers,
+                orders,
+                router,
+                new TravelTimeDispatchCandidateScorer(),
+                500.0,
+                10,
+                500.0,
+                2.0,
+                routes,
+                new RouteInsertionEngine(router, 10_000.0, 10_000.0));
+
+        DeliveryConstraints strict = new DeliveryConstraints(0.0, 0.0);
+
+        assertTrue(engine.dispatch(incoming, strict).isEmpty());
+        assertEquals(OrderStatus.CREATED, orders.getOrder(incoming.id()).orElseThrow().status());
+        assertEquals(List.of(existing), routes.getPlan(10L).orElseThrow().activeOrders());
+    }
+
+    @Test
+    void shouldAllowRouteConsolidationWhenDispatchSlaIsLoose() {
+        InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
+        Driver driver = new Driver(10L, driverA, DriverStatus.BUSY);
+        drivers.addDriver(driver);
+
+        Order existing = new Order(200L, driverB, dropoff, 1L, OrderStatus.ASSIGNED);
+        Order incoming = order();
+        InMemoryOrderStateStore orders = new InMemoryOrderStateStore();
+        orders.addOrder(existing);
+        orders.addOrder(incoming);
+
+        InMemoryDriverRouteStore routes = new InMemoryDriverRouteStore();
+        routes.putPlan(10L, DriverRoutePlan.single(existing));
+
+        CandidateSelector selector = new CandidateSelector(drivers, graph());
+        Router router = (source, target) -> new Route(List.of(source, target), 10.0, 100.0);
+        DispatchEngine engine = new DispatchEngine(
+                selector,
+                drivers,
+                orders,
+                router,
+                new TravelTimeDispatchCandidateScorer(),
+                500.0,
+                10,
+                500.0,
+                2.0,
+                routes,
+                new RouteInsertionEngine(router, 10_000.0, 10_000.0));
+
+        DeliveryConstraints loose = new DeliveryConstraints(10_000.0, 10_000.0);
+
+        Optional<DispatchAssignment> result = engine.dispatch(incoming, loose);
+
+        assertTrue(result.isPresent());
+        assertEquals(10L, result.orElseThrow().driverId());
+        assertEquals(OrderStatus.ASSIGNED, orders.getOrder(incoming.id()).orElseThrow().status());
+        assertEquals(2, routes.getPlan(10L).orElseThrow().activeDeliveryCount());
+    }
 }
