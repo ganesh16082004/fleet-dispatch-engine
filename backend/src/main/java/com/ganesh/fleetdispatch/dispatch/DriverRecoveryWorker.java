@@ -1,8 +1,8 @@
 package com.ganesh.fleetdispatch.dispatch;
 
-import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.graph.Route;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -39,8 +39,30 @@ public final class DriverRecoveryWorker {
         if (tasks.isEmpty()) {
             return Optional.empty();
         }
+        return processTask(tasks.get(0));
+    }
 
-        DriverRecoveryTask task = tasks.get(0);
+    /**
+     * Processes up to maxItems from one queue snapshot.
+     *
+     * <p>A temporarily blocked task no longer prevents later recoveries from
+     * being attempted in the same batch. Unassignable tasks are requeued by
+     * {@link #processTask(DriverRecoveryTask)}.</p>
+     */
+    public List<RecoveryAssignment> processBatch(int maxItems) {
+        if (maxItems <= 0) {
+            throw new IllegalArgumentException("maxItems must be positive");
+        }
+
+        List<DriverRecoveryTask> tasks = recoveryQueue.drain(maxItems);
+        List<RecoveryAssignment> assignments = new ArrayList<>();
+        for (DriverRecoveryTask task : tasks) {
+            processTask(task).ifPresent(assignments::add);
+        }
+        return List.copyOf(assignments);
+    }
+
+    private Optional<RecoveryAssignment> processTask(DriverRecoveryTask task) {
         Order order = orderStateStore.getOrder(task.orderId()).orElse(null);
         if (order == null || order.status() != OrderStatus.RECOVERY_REQUIRED) {
             return Optional.empty();
@@ -93,22 +115,5 @@ public final class DriverRecoveryWorker {
             recoveryQueue.enqueue(task);
         }
         return Optional.empty();
-    }
-
-    /** Processes up to maxItems queued recovery tasks. Tasks without a replacement remain queued. */
-    public List<RecoveryAssignment> processBatch(int maxItems) {
-        if (maxItems <= 0) {
-            throw new IllegalArgumentException("maxItems must be positive");
-        }
-
-        java.util.ArrayList<RecoveryAssignment> assignments = new java.util.ArrayList<>();
-        for (int i = 0; i < maxItems; i++) {
-            Optional<RecoveryAssignment> assignment = processNext();
-            if (assignment.isEmpty()) {
-                break;
-            }
-            assignments.add(assignment.get());
-        }
-        return List.copyOf(assignments);
     }
 }
