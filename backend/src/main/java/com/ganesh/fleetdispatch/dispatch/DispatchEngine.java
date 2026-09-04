@@ -99,6 +99,7 @@ public final class DispatchEngine {
             }
 
             if (orderStateStore.tryAssign(order.id(), driverId)) {
+                candidateScorer.onAssignmentCommitted(driver);
                 return Optional.of(new DispatchAssignment(
                         order.id(),
                         driverId,
@@ -203,6 +204,7 @@ public final class DispatchEngine {
                     .get(driver.id());
             if (routed != null && orderStateStore.tryAssign(order.id(), driver.id())) {
                 reservedDrivers.add(driver.id());
+                candidateScorer.onAssignmentCommitted(driver);
                 result.add(new DispatchAssignment(
                         order.id(),
                         driver.id(),
