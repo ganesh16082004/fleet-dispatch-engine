@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Map as LeafletMap, CircleMarker, LayerGroup, Polyline } from "leaflet";
 
 export type MapDriver = { id: number; currentNode: number; status: string };
@@ -33,6 +33,7 @@ export default function FleetMap({
   const driverLayerRef = useRef<LayerGroup | null>(null);
   const routeLayerRef = useRef<LayerGroup | null>(null);
   const graphRef = useRef<MapGraph | null>(graph);
+  const [mapReady, setMapReady] = useState(false);
 
   useEffect(() => { graphRef.current = graph; }, [graph]);
 
@@ -40,7 +41,12 @@ export default function FleetMap({
     let disposed = false;
     import("leaflet").then((L) => {
       if (disposed || !elementRef.current || mapRef.current) return;
-      const map = L.map(elementRef.current, { zoomControl: false, preferCanvas: true, minZoom: 10, maxZoom: 18 });
+      const map = L.map(elementRef.current, {
+        zoomControl: false,
+        preferCanvas: true,
+        minZoom: 10,
+        maxZoom: 18
+      });
       L.control.zoom({ position: "bottomright" }).addTo(map);
       L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
@@ -50,6 +56,7 @@ export default function FleetMap({
       routeLayerRef.current = L.layerGroup().addTo(map);
       mapRef.current = map;
       map.setView(graphRef.current?.center ?? [12.9716, 77.5946], graphRef.current ? 12 : 11);
+      setMapReady(true);
     });
 
     return () => {
@@ -58,26 +65,27 @@ export default function FleetMap({
       mapRef.current = null;
       driverLayerRef.current = null;
       routeLayerRef.current = null;
+      setMapReady(false);
     };
   }, []);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !graph) return;
+    if (!mapReady || !map || !graph) return;
     import("leaflet").then((L) => {
       if (!mapRef.current) return;
       const roads = L.geoJSON(graph.roads, {
-        style: { color: "#56746a", opacity: 0.48, weight: 1.2, lineCap: "round", lineJoin: "round" }
+        style: { color: "#56746a", opacity: 0.52, weight: 1.25, lineCap: "round", lineJoin: "round" }
       });
       roads.addTo(map);
       map.setView(graph.center, Math.max(11, map.getZoom()));
     });
-  }, [graph]);
+  }, [graph, mapReady]);
 
   useEffect(() => {
     const layer = driverLayerRef.current;
     const graphData = graphRef.current;
-    if (!layer || !graphData) return;
+    if (!mapReady || !layer || !graphData) return;
 
     import("leaflet").then((L) => {
       layer.clearLayers();
@@ -103,13 +111,13 @@ export default function FleetMap({
         marker.addTo(layer);
       }
     });
-  }, [drivers, locations, orders, onSelectOrder]);
+  }, [drivers, locations, orders, onSelectOrder, mapReady]);
 
   useEffect(() => {
     const layer = routeLayerRef.current;
     const map = mapRef.current;
     const graphData = graphRef.current;
-    if (!layer || !map || !graphData) return;
+    if (!mapReady || !layer || !map || !graphData) return;
 
     import("leaflet").then((L) => {
       layer.clearLayers();
@@ -134,7 +142,7 @@ export default function FleetMap({
       if (dropoff) L.circleMarker(dropoff, { radius: 7, color: "#fff", weight: 2, fillColor: "#e36d64", fillOpacity: 1 }).bindTooltip(`Drop-off · Order #${order.id}`).addTo(layer);
       if (routeCoordinates.length >= 2) map.fitBounds(L.latLngBounds(routeCoordinates), { padding: [45, 45], maxZoom: 15 });
     });
-  }, [selectedOrderId, orders]);
+  }, [selectedOrderId, orders, mapReady]);
 
   return <div ref={elementRef} className="fleet-map-canvas" aria-label="Bengaluru live fleet map" />;
 }
