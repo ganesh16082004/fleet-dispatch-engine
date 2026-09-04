@@ -1,7 +1,9 @@
 package com.ganesh.fleetdispatch.dispatch;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /** Immutable active-order plan for a driver. At most three orders may be active. */
 public record DriverRoutePlan(List<Order> activeOrders, List<RouteStop> stops) {
@@ -18,8 +20,47 @@ public record DriverRoutePlan(List<Order> activeOrders, List<RouteStop> stops) {
             throw new IllegalArgumentException(
                     "A driver may have at most " + MAX_ACTIVE_DELIVERIES + " active deliveries");
         }
-        if (stops.size() != activeOrders.size() * 2) {
-            throw new IllegalArgumentException("Each active order must have one pickup and one drop-off stop");
+
+        Set<Long> activeOrderIds = new HashSet<>();
+        for (Order order : activeOrders) {
+            Objects.requireNonNull(order, "activeOrders must not contain null");
+            if (order.status() != OrderStatus.ASSIGNED && order.status() != OrderStatus.PICKED_UP) {
+                throw new IllegalArgumentException(
+                        "Only ASSIGNED and PICKED_UP orders may be active in a route plan");
+            }
+            if (!activeOrderIds.add(order.id())) {
+                throw new IllegalArgumentException("Duplicate active order: " + order.id());
+            }
+        }
+
+        Set<Long> seenStops = new HashSet<>();
+        for (RouteStop stop : stops) {
+            if (!activeOrderIds.contains(stop.orderId())) {
+                throw new IllegalArgumentException(
+                        "Route stop belongs to an order outside the active order set: " + stop.orderId());
+            }
+            if (stop.type() == RouteStopType.PICKUP
+                    && activeOrders.stream()
+                    .filter(order -> order.id() == stop.orderId())
+                    .findFirst()
+                    .map(order -> order.status() == OrderStatus.PICKED_UP)
+                    .orElse(false)) {
+                throw new IllegalArgumentException(
+                        "PICKED_UP order cannot contain a PICKUP stop: " + stop.orderId());
+            }
+            if (!seenStops.add(stop.orderId() * 10L + stop.type().ordinal())) {
+                throw new IllegalArgumentException("Duplicate route stop for order: " + stop.orderId());
+            }
+        }
+
+        int expectedStops = activeOrders.stream()
+                .mapToInt(order -> order.status() == OrderStatus.PICKED_UP ? 1 : 2)
+                .sum();
+        if (stops.size() != expectedStops) {
+            throw new IllegalArgumentException(
+                    "Route plan contains " + stops.size()
+                            + " stops but expected " + expectedStops
+                            + " for the active order states");
         }
     }
 
@@ -29,7 +70,15 @@ public record DriverRoutePlan(List<Order> activeOrders, List<RouteStop> stops) {
 
     public static DriverRoutePlan single(Order order) {
         Objects.requireNonNull(order, "order");
-        return new DriverRoutePlan(
+        if (order.status() != OrderStatus.ASSIGNED && order.status() != OrderStatus.PICKED_UP) {
+            throw new IllegalArgumentException("Only ASSIGNED and PICKED_UP orders can be routed");
+        }
+
+        return order.status() == OrderStatus.PICKED_UP
+                ? new DriverRoutePlan(
+                List.of(order),
+                List.of(new RouteStop(order.id(), RouteStopType.DROPOFF, order.dropoffNode())))
+                : new DriverRoutePlan(
                 List.of(order),
                 List.of(
                         new RouteStop(order.id(), RouteStopType.PICKUP, order.pickupNode()),
