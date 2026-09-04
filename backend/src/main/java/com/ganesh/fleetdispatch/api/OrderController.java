@@ -41,6 +41,16 @@ public class OrderController {
         return orderService.dispatch(id);
     }
 
+    @PostMapping("/{id}/pickup")
+    public OrderResponse pickup(@PathVariable long id) {
+        return orderService.pickup(id);
+    }
+
+    @PostMapping("/{id}/complete")
+    public OrderResponse complete(@PathVariable long id) {
+        return orderService.complete(id);
+    }
+
     @PostMapping("/{id}/cancel")
     public OrderResponse cancel(@PathVariable long id) {
         return orderService.cancel(id);
