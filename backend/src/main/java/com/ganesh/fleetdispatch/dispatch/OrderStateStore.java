@@ -27,6 +27,12 @@ public interface OrderStateStore {
     /** Atomically transitions an order from one expected state to another. */
     boolean tryTransition(long orderId, OrderStatus expectedStatus, OrderStatus newStatus);
 
+    /** Atomically cancels an order and clears any attached driver. */
+    boolean tryCancel(long orderId);
+
+    /** Atomically moves an assigned order back to CREATED and clears its driver. */
+    boolean tryRequeue(long orderId, long expectedDriverId);
+
     /** Returns the driver currently attached to an assigned or offered order, if any. */
     OptionalLong getAssignedDriverId(long orderId);
 
