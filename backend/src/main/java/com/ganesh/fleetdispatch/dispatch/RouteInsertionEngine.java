@@ -38,9 +38,24 @@ public final class RouteInsertionEngine {
             NodeId currentNode,
             DriverRoutePlan currentPlan,
             Order newOrder) {
+        return evaluate(
+                currentNode,
+                currentPlan,
+                newOrder,
+                new DeliveryConstraints(
+                        maxExistingEtaIncreaseSeconds,
+                        maxNewOrderDeliveryEtaSeconds));
+    }
+
+    public Optional<RouteInsertionResult> evaluate(
+            NodeId currentNode,
+            DriverRoutePlan currentPlan,
+            Order newOrder,
+            DeliveryConstraints constraints) {
         Objects.requireNonNull(currentNode, "currentNode");
         Objects.requireNonNull(currentPlan, "currentPlan");
         Objects.requireNonNull(newOrder, "newOrder");
+        Objects.requireNonNull(constraints, "constraints");
 
         if (currentPlan.activeDeliveryCount() >= DriverRoutePlan.MAX_ACTIVE_DELIVERIES) {
             return Optional.empty();
@@ -69,14 +84,15 @@ public final class RouteInsertionEngine {
                     continue;
                 }
 
-                double maxExistingIncrease = maxExistingEtaIncrease(baseline.dropoffEtaByOrderId(),
+                double maxExistingIncrease = maxExistingEtaIncrease(
+                        baseline.dropoffEtaByOrderId(),
                         candidate.dropoffEtaByOrderId());
-                if (maxExistingIncrease > maxExistingEtaIncreaseSeconds) {
+                if (maxExistingIncrease > constraints.maxExistingDeliveryEtaIncreaseSeconds()) {
                     continue;
                 }
 
                 Double newEta = candidate.dropoffEtaByOrderId().get(newOrder.id());
-                if (newEta == null || newEta > maxNewOrderDeliveryEtaSeconds) {
+                if (newEta == null || newEta > constraints.maxNewOrderDeliveryEtaSeconds()) {
                     continue;
                 }
 
