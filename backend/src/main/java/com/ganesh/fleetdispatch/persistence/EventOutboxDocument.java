@@ -10,7 +10,7 @@ import java.util.UUID;
 @Document(collection = "event_outbox")
 public record EventOutboxDocument(
         @Id String id,
-        UUID eventId,
+        String eventId,
         String eventType,
         String aggregateId,
         String aggregateType,
@@ -30,7 +30,7 @@ public record EventOutboxDocument(
         Instant now = Instant.now();
         return new EventOutboxDocument(
                 eventId.toString(),
-                eventId,
+                eventId.toString(),
                 eventType,
                 aggregateId,
                 aggregateType,
