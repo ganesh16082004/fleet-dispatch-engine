@@ -78,6 +78,33 @@ public class OrderService {
                 assignment.driverToPickupRoute().nodes().stream().map(NodeId::value).toList());
     }
 
+    public OrderResponse pickup(long id) {
+        Order order = currentOrder(id);
+        long driverId = assignedDriverId(id, order);
+
+        if (!orderStateStore.tryTransition(id, OrderStatus.ASSIGNED, OrderStatus.PICKED_UP)) {
+            throw new IllegalStateException("Order is not ASSIGNED: " + id);
+        }
+
+        Order updated = currentOrder(id);
+        save(updated, driverId);
+        return response(updated, driverId, List.of());
+    }
+
+    public OrderResponse complete(long id) {
+        Order order = currentOrder(id);
+        long driverId = assignedDriverId(id, order);
+
+        if (!orderStateStore.tryTransition(id, OrderStatus.PICKED_UP, OrderStatus.COMPLETED)) {
+            throw new IllegalStateException("Order is not PICKED_UP: " + id);
+        }
+
+        persistDriverStatus(driverId, DriverStatus.AVAILABLE);
+        Order updated = currentOrder(id);
+        save(updated, driverId);
+        return response(updated, driverId, List.of());
+    }
+
     public OrderResponse cancel(long id) {
         Long assignedDriverId = orderStateStore.getAssignedDriverId(id).isPresent()
                 ? orderStateStore.getAssignedDriverId(id).getAsLong()
@@ -92,6 +119,14 @@ public class OrderService {
         }
         save(updated, null);
         return response(updated, null, List.of());
+    }
+
+    private long assignedDriverId(long id, Order order) {
+        if (order.status() != OrderStatus.ASSIGNED && order.status() != OrderStatus.PICKED_UP) {
+            throw new IllegalStateException("Order has no active driver: " + id);
+        }
+        return orderStateStore.getAssignedDriverId(id)
+                .orElseThrow(() -> new IllegalStateException("Order has no assigned driver: " + id));
     }
 
     private void persistDriverStatus(long driverId, DriverStatus status) {
