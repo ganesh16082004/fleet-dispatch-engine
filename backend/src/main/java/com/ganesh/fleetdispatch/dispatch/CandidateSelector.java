@@ -59,6 +59,10 @@ public final class CandidateSelector {
                 .toList();
     }
 
+    RoadGraph roadGraph() {
+        return roadGraph;
+    }
+
     private static double haversineMeters(
             double lat1,
             double lon1,
