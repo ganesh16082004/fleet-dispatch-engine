@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Fleet Dispatch Command Center</title>
+  <style>
+    :root { font-family: Inter, system-ui, sans-serif; background:#0b1020; color:#eef2ff; }
+    * { box-sizing:border-box; }
+    body { margin:0; padding:24px; background:linear-gradient(145deg,#0b1020,#111936); min-height:100vh; }
+    .top { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; }
+    h1 { margin:0; font-size:26px; }
+    .pill { padding:8px 12px; border-radius:999px; background:#182348; font-size:13px; }
+    .grid { display:grid; grid-template-columns:1.3fr 1fr; gap:16px; }
+    .card { background:#121a33; border:1px solid #27345e; border-radius:16px; padding:18px; box-shadow:0 12px 30px rgba(0,0,0,.2); }
+    .map { position:relative; height:460px; overflow:hidden; background:#0d1429; border-radius:12px; border:1px solid #263258; }
+    .road { position:absolute; background:#27345e; opacity:.7; }
+    .h { height:3px; left:0; right:0; }
+    .v { width:3px; top:0; bottom:0; }
+    .driver { position:absolute; width:18px; height:18px; border-radius:50%; border:3px solid #fff; transform:translate(-50%,-50%); transition:left .45s linear, top .45s linear; }
+    .driver span { position:absolute; left:14px; top:-6px; white-space:nowrap; font-size:11px; }
+    .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:12px; }
+    .stat { background:#0d1429; padding:12px; border-radius:10px; }
+    .label { color:#9aa7cf; font-size:12px; }
+    .value { font-size:24px; font-weight:700; margin-top:3px; }
+    table { width:100%; border-collapse:collapse; margin-top:10px; }
+    th,td { text-align:left; padding:9px 6px; border-bottom:1px solid #263258; font-size:13px; }
+    th { color:#9aa7cf; font-weight:600; }
+    .status { font-weight:700; }
+    .AVAILABLE { color:#6ee7a8; } .BUSY { color:#ffd166; } .OFFLINE { color:#ff7b7b; }
+    .feed { max-height:310px; overflow:auto; margin-top:10px; }
+    .event { padding:9px 0; border-bottom:1px solid #202b4e; font-size:12px; color:#c4cbea; }
+    .connected { color:#6ee7a8; } .disconnected { color:#ff7b7b; }
+    @media (max-width:900px) { .grid{grid-template-columns:1fr;} }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div><h1>Fleet Dispatch Command Center</h1><div class="label">Live driver movement · heartbeat · failure detection</div></div>
+    <div id="connection" class="pill disconnected">Connecting…</div>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Live Fleet</h2>
+      <div id="map" class="map">
+        <div class="road h" style="top:22%"></div><div class="road h" style="top:48%"></div><div class="road h" style="top:75%"></div>
+        <div class="road v" style="left:20%"></div><div class="road v" style="left:48%"></div><div class="road v" style="left:76%"></div>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="label">TOTAL</div><div id="total" class="value">0</div></div>
+        <div class="stat"><div class="label">ACTIVE</div><div id="active" class="value">0</div></div>
+        <div class="stat"><div class="label">OFFLINE</div><div id="offline" class="value">0</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Driver State</h2>
+      <table><thead><tr><th>Driver</th><th>Status</th><th>Node</th><th>Seq</th><th>Heartbeat</th></tr></thead><tbody id="drivers"></tbody></table>
+      <h2 style="margin-top:20px">Event Stream</h2>
+      <div id="feed" class="feed"></div>
+    </section>
+  </div>
+
+<script>
+const drivers = new Map();
+const positions = new Map();
+const palette = ['#68d391','#63b3ed','#f6ad55','#f687b3','#b794f4','#4fd1c5','#fbd38d','#fc8181'];
+const map = document.getElementById('map');
+const feed = document.getElementById('feed');
+function log(text){ const e=document.createElement('div'); e.className='event'; e.textContent=new Date().toLocaleTimeString()+'  '+text; feed.prepend(e); while(feed.children.length>40) feed.lastChild.remove(); }
+function positionFor(nodeId, seq){
+  const n = Number(nodeId); const s=Number(seq);
+  const x = 10 + ((Math.abs(n * 37 + s * 11) % 800) / 10);
+  const y = 10 + ((Math.abs(n * 19 + s * 17) % 800) / 10);
+  return {x:Math.min(92,x), y:Math.min(92,y)};
+}
+function render(){
+  const rows=[]; let active=0, offline=0;
+  for(const d of [...drivers.values()].sort((a,b)=>a.driverId-b.driverId)){
+    if(d.status==='OFFLINE') offline++; else active++;
+    rows.push(`<tr><td>#${d.driverId}</td><td class="status ${d.status}">${d.status}</td><td>${d.nodeId}</td><td>${d.sequenceNumber}</td><td>${d.lastHeartbeatMillis<0?'—':new Date(d.lastHeartbeatMillis).toLocaleTimeString()}</td></tr>`);
+    let dot=document.getElementById('driver-'+d.driverId);
+    if(!dot){ dot=document.createElement('div'); dot.id='driver-'+d.driverId; dot.className='driver'; dot.style.background=palette[(d.driverId-1)%palette.length]; dot.innerHTML=`<span>#${d.driverId}</span>`; map.appendChild(dot); }
+    const p=positions.get(d.driverId)||positionFor(d.nodeId,d.sequenceNumber); positions.set(d.driverId,p); dot.style.left=p.x+'%'; dot.style.top=p.y+'%'; dot.style.opacity=d.status==='OFFLINE'?.35:1;
+  }
+  document.getElementById('drivers').innerHTML=rows.join('');
+  document.getElementById('total').textContent=drivers.size;
+  document.getElementById('active').textContent=active;
+  document.getElementById('offline').textContent=offline;
+}
+const ws = new WebSocket('ws://127.0.0.1:8088/dashboard');
+ws.onopen=()=>{document.getElementById('connection').textContent='LIVE'; document.getElementById('connection').className='pill connected'; log('Dashboard stream connected');};
+ws.onclose=()=>{document.getElementById('connection').textContent='DISCONNECTED'; document.getElementById('connection').className='pill disconnected'; log('Dashboard stream disconnected');};
+ws.onerror=()=>log('Dashboard WebSocket error');
+ws.onmessage=e=>{ const m=JSON.parse(e.data); if(m.type==='location'){ const old=drivers.get(m.driverId); drivers.set(m.driverId,{...(old||{}),...m,status:old?.status||'AVAILABLE',lastHeartbeatMillis:m.timestampMillis,sequenceNumber:m.sequenceNumber,nodeId:m.nodeId}); log(`Driver #${m.driverId} → node ${m.nodeId} · seq ${m.sequenceNumber}`); render(); } else if(m.type==='snapshot'){ for(const d of m.drivers) drivers.set(d.driverId,d); render(); } };
+</script>
+</body>
+</html>
