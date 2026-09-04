@@ -13,18 +13,29 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
-/** Converts nearby-driver candidates into actual dispatch decisions. */
+/** Converts nearby-driver candidates into route-efficient dispatch decisions. */
 public final class DispatchEngine {
     private static final double INFEASIBLE_COST = Double.MAX_VALUE / 4.0;
+    private static final int DEFAULT_MAX_ACTIVE_DELIVERIES = DriverRoutePlan.MAX_ACTIVE_DELIVERIES;
+    private static final double DEFAULT_MAX_EXISTING_ETA_INCREASE_SECONDS = 300.0;
+    private static final double DEFAULT_MAX_NEW_ORDER_DELIVERY_ETA_SECONDS = 1_800.0;
+    private static final double DEFAULT_RADIUS_EXPANSION_FACTOR = 2.0;
 
     private final CandidateSelector candidateSelector;
+    private final RouteCandidateSelector routeCandidateSelector;
     private final DriverStateStore driverStateStore;
     private final OrderStateStore orderStateStore;
+    private final DriverRouteStore driverRouteStore;
+    private final RouteInsertionEngine routeInsertionEngine;
     private final Router router;
     private final DispatchCandidateScorer candidateScorer;
     private final double searchRadiusMeters;
+    private final double maxSearchRadiusMeters;
+    private final double radiusExpansionFactor;
     private final int maxCandidates;
+    private final ConcurrentHashMap<Long, Object> driverDispatchLocks = new ConcurrentHashMap<>();
 
     public DispatchEngine(
             CandidateSelector candidateSelector,
@@ -51,24 +62,68 @@ public final class DispatchEngine {
             DispatchCandidateScorer candidateScorer,
             double searchRadiusMeters,
             int maxCandidates) {
+        this(
+                candidateSelector,
+                driverStateStore,
+                orderStateStore,
+                router,
+                candidateScorer,
+                searchRadiusMeters,
+                maxCandidates,
+                searchRadiusMeters * 4.0,
+                DEFAULT_RADIUS_EXPANSION_FACTOR,
+                new InMemoryDriverRouteStore(),
+                new RouteInsertionEngine(
+                        router,
+                        DEFAULT_MAX_EXISTING_ETA_INCREASE_SECONDS,
+                        DEFAULT_MAX_NEW_ORDER_DELIVERY_ETA_SECONDS));
+    }
+
+    public DispatchEngine(
+            CandidateSelector candidateSelector,
+            DriverStateStore driverStateStore,
+            OrderStateStore orderStateStore,
+            Router router,
+            DispatchCandidateScorer candidateScorer,
+            double searchRadiusMeters,
+            int maxCandidates,
+            double maxSearchRadiusMeters,
+            double radiusExpansionFactor,
+            DriverRouteStore driverRouteStore,
+            RouteInsertionEngine routeInsertionEngine) {
         this.candidateSelector = Objects.requireNonNull(candidateSelector, "candidateSelector");
         this.driverStateStore = Objects.requireNonNull(driverStateStore, "driverStateStore");
         this.orderStateStore = Objects.requireNonNull(orderStateStore, "orderStateStore");
         this.router = Objects.requireNonNull(router, "router");
         this.candidateScorer = Objects.requireNonNull(candidateScorer, "candidateScorer");
+        this.driverRouteStore = Objects.requireNonNull(driverRouteStore, "driverRouteStore");
+        this.routeInsertionEngine = Objects.requireNonNull(routeInsertionEngine, "routeInsertionEngine");
 
         if (!Double.isFinite(searchRadiusMeters) || searchRadiusMeters < 0) {
             throw new IllegalArgumentException("searchRadiusMeters must be finite and non-negative");
+        }
+        if (!Double.isFinite(maxSearchRadiusMeters) || maxSearchRadiusMeters < searchRadiusMeters) {
+            throw new IllegalArgumentException(
+                    "maxSearchRadiusMeters must be finite and >= searchRadiusMeters");
+        }
+        if (!Double.isFinite(radiusExpansionFactor) || radiusExpansionFactor <= 1.0) {
+            throw new IllegalArgumentException("radiusExpansionFactor must be finite and greater than 1");
         }
         if (maxCandidates <= 0) {
             throw new IllegalArgumentException("maxCandidates must be positive");
         }
 
         this.searchRadiusMeters = searchRadiusMeters;
+        this.maxSearchRadiusMeters = maxSearchRadiusMeters;
+        this.radiusExpansionFactor = radiusExpansionFactor;
         this.maxCandidates = maxCandidates;
+        this.routeCandidateSelector = new RouteCandidateSelector(
+                driverStateStore,
+                driverRouteStore,
+                candidateSelectorRoadGraph(candidateSelector));
     }
 
-    /** Attempts to assign an order to an available driver. */
+    /** Attempts route consolidation first, then falls back to a fresh driver. */
     public Optional<DispatchAssignment> dispatch(Order order) {
         Objects.requireNonNull(order, "order");
         if (order.status() != OrderStatus.CREATED) {
@@ -80,8 +135,76 @@ public final class DispatchEngine {
             return Optional.empty();
         }
 
+        driverRouteStore.pruneInactive(orderStateStore);
+
+        for (double radius : searchRadii()) {
+            Optional<DispatchAssignment> consolidated = dispatchIntoExistingRoute(order, radius);
+            if (consolidated.isPresent()) {
+                return consolidated;
+            }
+
+            Optional<DispatchAssignment> freshDriver = dispatchToAvailableDriver(order, radius);
+            if (freshDriver.isPresent()) {
+                return freshDriver;
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private Optional<DispatchAssignment> dispatchIntoExistingRoute(Order order, double radius) {
+        List<RouteCandidateSelector.RouteDriverCandidate> candidates = routeCandidateSelector
+                .select(order, radius, maxCandidates);
+
+        List<RouteOption> options = new ArrayList<>();
+        for (RouteCandidateSelector.RouteDriverCandidate candidate : candidates) {
+            routeInsertionEngine
+                    .evaluate(candidate.driver().currentNode(), candidate.plan(), order)
+                    .ifPresent(result -> options.add(new RouteOption(candidate.driver(), result)));
+        }
+
+        options.sort(Comparator
+                .comparingDouble((RouteOption option) ->
+                        option.insertion().incrementalTravelTimeSeconds())
+                .thenComparingDouble(option -> option.insertion().incrementalDistanceMeters())
+                .thenComparingDouble(option -> option.insertion().maxExistingDeliveryEtaIncreaseSeconds())
+                .thenComparingLong(option -> option.driver().id()));
+
+        for (RouteOption option : options) {
+            Driver driver = option.driver();
+            synchronized (driverDispatchLocks.computeIfAbsent(driver.id(), ignored -> new Object())) {
+                Driver currentDriver = driverStateStore.getDriver(driver.id()).orElse(null);
+                DriverRoutePlan currentPlan = driverRouteStore.getPlan(driver.id()).orElse(null);
+                if (currentDriver == null || currentPlan == null
+                        || currentPlan.activeDeliveryCount() >= DEFAULT_MAX_ACTIVE_DELIVERIES) {
+                    continue;
+                }
+
+                Optional<RouteInsertionResult> reevaluated = routeInsertionEngine.evaluate(
+                        currentDriver.currentNode(), currentPlan, order);
+                if (reevaluated.isEmpty()) {
+                    continue;
+                }
+
+                RouteInsertionResult insertion = reevaluated.get();
+                if (!orderStateStore.tryAssign(order.id(), driver.id())) {
+                    continue;
+                }
+
+                driverRouteStore.putPlan(driver.id(), insertion.plan());
+                return Optional.of(new DispatchAssignment(
+                        order.id(),
+                        driver.id(),
+                        insertion.route()));
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private Optional<DispatchAssignment> dispatchToAvailableDriver(Order order, double radius) {
         List<RoutedCandidate> routedCandidates = candidateSelector
-                .select(order, searchRadiusMeters, maxCandidates)
+                .select(order, radius, maxCandidates)
                 .stream()
                 .map(candidate -> routeCandidate(candidate, order))
                 .flatMap(Optional::stream)
@@ -94,19 +217,21 @@ public final class DispatchEngine {
             long driverId = driver.id();
             NodeId expectedNode = driver.currentNode();
 
-            if (!driverStateStore.reserveDriver(driverId, expectedNode)) {
-                continue;
-            }
+            synchronized (driverDispatchLocks.computeIfAbsent(driverId, ignored -> new Object())) {
+                if (!driverStateStore.reserveDriver(driverId, expectedNode)) {
+                    continue;
+                }
 
-            if (orderStateStore.tryAssign(order.id(), driverId)) {
-                candidateScorer.onAssignmentCommitted(driver);
-                return Optional.of(new DispatchAssignment(
-                        order.id(),
-                        driverId,
-                        candidate.route()));
-            }
+                if (orderStateStore.tryAssign(order.id(), driverId)) {
+                    driverRouteStore.putPlan(driverId, DriverRoutePlan.single(order));
+                    return Optional.of(new DispatchAssignment(
+                            order.id(),
+                            driverId,
+                            candidate.route()));
+                }
 
-            driverStateStore.releaseDriver(driverId, expectedNode);
+                driverStateStore.releaseDriver(driverId, expectedNode);
+            }
         }
 
         return Optional.empty();
@@ -195,27 +320,46 @@ public final class DispatchEngine {
             Driver driver = drivers.get(driverIndex);
             NodeId expectedNode = driver.currentNode();
 
-            if (!driverStateStore.reserveDriver(driver.id(), expectedNode)) {
-                continue;
-            }
+            synchronized (driverDispatchLocks.computeIfAbsent(driver.id(), ignored -> new Object())) {
+                if (!driverStateStore.reserveDriver(driver.id(), expectedNode)) {
+                    continue;
+                }
 
-            RoutedCandidate routed = routedByOrderAndDriver
-                    .get(order.id())
-                    .get(driver.id());
-            if (routed != null && orderStateStore.tryAssign(order.id(), driver.id())) {
-                reservedDrivers.add(driver.id());
-                candidateScorer.onAssignmentCommitted(driver);
-                result.add(new DispatchAssignment(
-                        order.id(),
-                        driver.id(),
-                        routed.route()));
-            } else {
-                driverStateStore.releaseDriver(driver.id(), expectedNode);
+                RoutedCandidate routed = routedByOrderAndDriver
+                        .get(order.id())
+                        .get(driver.id());
+                if (routed != null && orderStateStore.tryAssign(order.id(), driver.id())) {
+                    reservedDrivers.add(driver.id());
+                    driverRouteStore.putPlan(driver.id(), DriverRoutePlan.single(order));
+                    result.add(new DispatchAssignment(
+                            order.id(),
+                            driver.id(),
+                            routed.route()));
+                } else {
+                    driverStateStore.releaseDriver(driver.id(), expectedNode);
+                }
             }
         }
 
         result.sort(Comparator.comparingLong(DispatchAssignment::orderId));
         return List.copyOf(result);
+    }
+
+    private List<Double> searchRadii() {
+        List<Double> radii = new ArrayList<>();
+        double current = searchRadiusMeters;
+        radii.add(current);
+        while (current < maxSearchRadiusMeters) {
+            double next = current == 0.0
+                    ? maxSearchRadiusMeters
+                    : Math.min(maxSearchRadiusMeters, current * radiusExpansionFactor);
+            if (next <= current) {
+                break;
+            }
+            radii.add(next);
+            current = next;
+        }
+        return radii;
     }
 
     private int compareRoutedCandidates(RoutedCandidate left, RoutedCandidate right) {
@@ -344,6 +488,19 @@ public final class DispatchEngine {
         }
     }
 
+    private RoadGraph candidateSelectorRoadGraph(CandidateSelector selector) {
+        try {
+            var field = CandidateSelector.class.getDeclaredField("roadGraph");
+            field.setAccessible(true);
+            return (com.ganesh.fleetdispatch.graph.RoadGraph) field.get(selector);
+        } catch (ReflectiveOperationException exception) {
+            throw new IllegalStateException("Unable to access candidate selector road graph", exception);
+        }
+    }
+
     private record RoutedCandidate(DriverCandidate candidate, Route route) {
+    }
+
+    private record RouteOption(Driver driver, RouteInsertionResult insertion) {
     }
 }
