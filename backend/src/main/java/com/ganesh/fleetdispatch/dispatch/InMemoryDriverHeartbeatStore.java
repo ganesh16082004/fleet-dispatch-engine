@@ -11,6 +11,17 @@ public final class InMemoryDriverHeartbeatStore implements DriverHeartbeatStore 
     private final ConcurrentHashMap<Long, Heartbeat> heartbeats = new ConcurrentHashMap<>();
 
     @Override
+    public void startSession(long driverId, long sessionStartTimestampMillis) {
+        if (driverId < 0) {
+            throw new IllegalArgumentException("driverId must be non-negative");
+        }
+        if (sessionStartTimestampMillis < 0) {
+            throw new IllegalArgumentException("sessionStartTimestampMillis must be non-negative");
+        }
+        heartbeats.put(driverId, new Heartbeat(0L, sessionStartTimestampMillis));
+    }
+
+    @Override
     public boolean recordHeartbeat(long driverId, long sequenceNumber, long heartbeatTimestampMillis) {
         if (driverId < 0) {
             throw new IllegalArgumentException("driverId must be non-negative");
