@@ -83,4 +83,24 @@ class DriverLocationTrackerTest {
                 IllegalStateException.class,
                 () -> tracker.registerSession(10L, UUID.randomUUID(), 2_000L));
     }
+
+    @Test
+    void shouldExplicitlyReRegisterOfflineDriverWithFreshSession() {
+        InMemoryDriverStateStore drivers = new InMemoryDriverStateStore();
+        NodeId initial = new NodeId(1L);
+        NodeId reconnect = new NodeId(9L);
+        drivers.addDriver(new Driver(10L, initial, DriverStatus.OFFLINE));
+        InMemoryDriverHeartbeatStore heartbeats = new InMemoryDriverHeartbeatStore();
+        DriverLocationTracker tracker = new DriverLocationTracker(drivers, heartbeats);
+
+        UUID session = tracker.reRegisterDriver(10L, reconnect, 10_000L);
+
+        assertEquals(DriverStatus.AVAILABLE, drivers.getDriver(10L).orElseThrow().status());
+        assertEquals(reconnect, drivers.getDriver(10L).orElseThrow().currentNode());
+        assertEquals(10_000L, heartbeats.getLastHeartbeatMillis(10L).orElseThrow());
+        assertEquals(0L, heartbeats.getLastSequenceNumber(10L).orElseThrow());
+        assertTrue(tracker.update(
+                new DriverLocationUpdate(10L, session, 1L, new NodeId(10L), 10_100L)));
+        assertEquals(new NodeId(10L), drivers.getDriver(10L).orElseThrow().currentNode());
+    }
 }
