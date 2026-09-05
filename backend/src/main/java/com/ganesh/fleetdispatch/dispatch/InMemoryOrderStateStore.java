@@ -21,6 +21,15 @@ public final class InMemoryOrderStateStore implements OrderStateStore {
     }
 
     @Override
+    public void restoreOrder(Order order, Long assignedDriverId) {
+        Objects.requireNonNull(order, "order must not be null");
+        if (assignedDriverId != null) {
+            validateDriverId(assignedDriverId);
+        }
+        orders.putIfAbsent(order.id(), new OrderState(order, assignedDriverId));
+    }
+
+    @Override
     public Optional<Order> getOrder(long orderId) {
         OrderState state = orders.get(orderId);
         return state == null ? Optional.empty() : Optional.of(state.order());
