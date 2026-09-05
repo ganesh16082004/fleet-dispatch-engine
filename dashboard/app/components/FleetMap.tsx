@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Map as LeafletMap, CircleMarker, LayerGroup, Polyline, Rectangle } from "leaflet";
+import type { Map as LeafletMap, CircleMarker, LayerGroup, Polyline, Rectangle, GeoJSON as LeafletGeoJSON } from "leaflet";
 
 export type MapDriver = { id: number; currentNode: number; status: string };
 export type MapOrder = { id: number; pickupNode: number; dropoffNode: number; status: string; assignedDriverId?: number | null; route?: number[] };
@@ -34,7 +34,7 @@ export default function FleetMap({
   const driverLayerRef = useRef<LayerGroup | null>(null);
   const routeLayerRef = useRef<LayerGroup | null>(null);
   const boundaryRef = useRef<Rectangle | null>(null);
-  const roadsRef = useRef<GeoJSON.GeoJSON | null>(null);
+  const roadsRef = useRef<LeafletGeoJSON | null>(null);
   const graphRef = useRef<MapGraph | null>(graph);
   const renderedGraphSignatureRef = useRef<string | null>(null);
   const [mapReady, setMapReady] = useState(false);

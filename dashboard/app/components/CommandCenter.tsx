@@ -148,8 +148,9 @@ export default function CommandCenter() {
         socket.onmessage = (message) => {
           try {
             const packet = JSON.parse(message.data as string) as { type?: string; drivers?: Driver[] } & LiveLocation;
-            if (packet.type === "snapshot" && Array.isArray(packet.drivers)) {
-              setDrivers((current) => ({ ...current, ...Object.fromEntries(packet.drivers.map((driver) => [driver.id, driver])) }));
+            const snapshotDrivers = packet.drivers;
+            if (packet.type === "snapshot" && Array.isArray(snapshotDrivers)) {
+              setDrivers((current) => ({ ...current, ...Object.fromEntries(snapshotDrivers.map((driver) => [driver.id, driver])) }));
             }
             if (packet.type === "location" || typeof packet.driverId === "number") {
               const live: LiveLocation = {
