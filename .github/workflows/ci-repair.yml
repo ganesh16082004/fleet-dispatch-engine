@@ -1,0 +1,67 @@
+name: Repair CI
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/ci-repair.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply CI fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          command = Path('dashboard/app/components/CommandCenter.tsx')
+          text = command.read_text(encoding='utf-8')
+          old = '''            if (packet.type === "snapshot" && Array.isArray(packet.drivers)) {\n              setDrivers((current) => ({ ...current, ...Object.fromEntries(packet.drivers.map((driver) => [driver.id, driver])) }));\n            }'''
+          new = '''            const snapshotDrivers = packet.drivers;\n            if (packet.type === "snapshot" && Array.isArray(snapshotDrivers)) {\n              setDrivers((current) => ({ ...current, ...Object.fromEntries(snapshotDrivers.map((driver) => [driver.id, driver])) }));\n            }'''
+          if old not in text:
+              raise SystemExit('CommandCenter patch target not found')
+          command.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          fleet_map = Path('dashboard/app/components/FleetMap.tsx')
+          text = fleet_map.read_text(encoding='utf-8')
+          text = text.replace('import type { Map as LeafletMap, CircleMarker, LayerGroup, Polyline, Rectangle } from "leaflet";', 'import type { Map as LeafletMap, CircleMarker, LayerGroup, Polyline, Rectangle, GeoJSON as LeafletGeoJSON } from "leaflet";', 1)
+          text = text.replace('const roadsRef = useRef<GeoJSON.GeoJSON | null>(null);', 'const roadsRef = useRef<LeafletGeoJSON | null>(null);', 1)
+          fleet_map.write_text(text, encoding='utf-8')
+
+          pom = Path('pom.xml')
+          text = pom.read_text(encoding='utf-8')
+          start = text.find('            <plugin>\n                <groupId>org.apache.maven.plugins</groupId>\n                <artifactId>maven-shade-plugin</artifactId>')
+          if start == -1:
+              raise SystemExit('Maven shade plugin block not found')
+          end_marker = '            </plugin>\n            <plugin>\n                <groupId>org.codehaus.mojo</groupId>\n                <artifactId>exec-maven-plugin</artifactId>'
+          end = text.find(end_marker, start)
+          if end == -1:
+              raise SystemExit('Maven shade plugin end marker not found')
+          text = text[:start] + text[end + len('            </plugin>\n'):]
+          pom.write_text(text, encoding='utf-8')
+
+      - name: Verify fixes
+        run: |
+          test -f pom.xml
+          test -f dashboard/app/components/CommandCenter.tsx
+          test -f dashboard/app/components/FleetMap.tsx
+
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add pom.xml dashboard/app/components/CommandCenter.tsx dashboard/app/components/FleetMap.tsx
+          if git diff --cached --quiet; then
+            echo 'No fixes required.'
+            exit 0
+          fi
+          git commit -m 'fix: repair production CI build'
+          git push
