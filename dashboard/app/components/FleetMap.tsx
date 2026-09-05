@@ -36,6 +36,7 @@ export default function FleetMap({
   const boundaryRef = useRef<Rectangle | null>(null);
   const roadsRef = useRef<GeoJSON.GeoJSON | null>(null);
   const graphRef = useRef<MapGraph | null>(graph);
+  const renderedGraphSignatureRef = useRef<string | null>(null);
   const [mapReady, setMapReady] = useState(false);
 
   useEffect(() => { graphRef.current = graph; }, [graph]);
@@ -70,6 +71,7 @@ export default function FleetMap({
       routeLayerRef.current = null;
       boundaryRef.current = null;
       roadsRef.current = null;
+      renderedGraphSignatureRef.current = null;
       setMapReady(false);
     };
   }, []);
@@ -77,6 +79,9 @@ export default function FleetMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!mapReady || !map || !graph) return;
+    const signature = `${graph.nodeCount}:${graph.edgeCount}:${graph.roads.features.length}`;
+    if (renderedGraphSignatureRef.current === signature) return;
+
     import("leaflet").then((L) => {
       if (!mapRef.current) return;
 
@@ -94,7 +99,7 @@ export default function FleetMap({
       }).addTo(map);
 
       // The boundary comes directly from the minimum/maximum coordinates of the
-      // same road graph consumed by Dijkstra/A*. It is not a guessed city box.
+      // same complete road graph consumed by Dijkstra/A*. It is not a guessed city box.
       const [minLongitude, minLatitude, maxLongitude, maxLatitude] = graph.bounds;
       boundaryRef.current = L.rectangle(
         [[minLatitude, minLongitude], [maxLatitude, maxLongitude]],
@@ -112,6 +117,7 @@ export default function FleetMap({
         [[minLatitude, minLongitude], [maxLatitude, maxLongitude]],
         { padding: [18, 18], maxZoom: 14 }
       );
+      renderedGraphSignatureRef.current = signature;
     });
   }, [graph, mapReady]);
 
