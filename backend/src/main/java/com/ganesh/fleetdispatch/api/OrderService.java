@@ -128,7 +128,12 @@ public class OrderService {
             throw new IllegalStateException("Order is not PICKED_UP: " + id);
         }
 
-        persistDriverStatus(driverId, DriverStatus.AVAILABLE);
+        dispatchEngine.completeOrder(driverId, id);
+        DriverStatus resultingDriverStatus = driverStateStore.getDriver(driverId)
+                .map(driver -> driver.status())
+                .orElse(DriverStatus.AVAILABLE);
+        persistDriverStatus(driverId, resultingDriverStatus);
+
         Order updated = currentOrder(id);
         save(updated, driverId);
         eventPublisher.publish(
