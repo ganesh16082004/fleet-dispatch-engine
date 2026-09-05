@@ -1,20 +1,24 @@
 package com.ganesh.fleetdispatch.api;
 
 import com.ganesh.fleetdispatch.dispatch.CandidateSelector;
+import com.ganesh.fleetdispatch.dispatch.DispatchCandidateScorer;
 import com.ganesh.fleetdispatch.dispatch.DispatchEngine;
-import com.ganesh.fleetdispatch.dispatch.InMemoryDriverStateStore;
-import com.ganesh.fleetdispatch.dispatch.InMemoryOrderStateStore;
 import com.ganesh.fleetdispatch.dispatch.Driver;
+import com.ganesh.fleetdispatch.dispatch.DriverRouteStore;
 import com.ganesh.fleetdispatch.dispatch.DriverStateStore;
 import com.ganesh.fleetdispatch.dispatch.DriverStatus;
+import com.ganesh.fleetdispatch.dispatch.InMemoryDriverStateStore;
+import com.ganesh.fleetdispatch.dispatch.InMemoryOrderStateStore;
 import com.ganesh.fleetdispatch.dispatch.Order;
 import com.ganesh.fleetdispatch.dispatch.OrderStateStore;
 import com.ganesh.fleetdispatch.dispatch.OrderStatus;
+import com.ganesh.fleetdispatch.dispatch.RouteInsertionEngine;
+import com.ganesh.fleetdispatch.dispatch.TravelTimeDispatchCandidateScorer;
 import com.ganesh.fleetdispatch.graph.CsvRoadNetworkLoader;
+import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.graph.RoadEdge;
 import com.ganesh.fleetdispatch.graph.RoadGraph;
 import com.ganesh.fleetdispatch.graph.RoadNode;
-import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.domain.Location;
 import com.ganesh.fleetdispatch.persistence.DriverDocument;
 import com.ganesh.fleetdispatch.persistence.DriverRepository;
@@ -112,9 +116,25 @@ public class FleetEngineConfiguration {
             DriverStateStore drivers,
             OrderStateStore orders,
             RoadGraph graph,
-            Router router) {
+            Router router,
+            DriverRouteStore driverRouteStore) {
         CandidateSelector selector = new CandidateSelector(drivers, graph);
-        return new DispatchEngine(selector, drivers, orders, router, 2_000.0, 10);
+        DispatchCandidateScorer scorer = new TravelTimeDispatchCandidateScorer();
+        return new DispatchEngine(
+                selector,
+                drivers,
+                orders,
+                router,
+                scorer,
+                2_000.0,
+                10,
+                8_000.0,
+                2.0,
+                driverRouteStore,
+                new RouteInsertionEngine(
+                        router,
+                        300.0,
+                        1_800.0));
     }
 
     private static String configuredPath(String key, String defaultValue) {
