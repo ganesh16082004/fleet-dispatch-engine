@@ -1,9 +1,12 @@
 package com.ganesh.fleetdispatch.dispatch;
 
+import com.ganesh.fleetdispatch.events.FleetEventPublisher;
+import com.ganesh.fleetdispatch.events.FleetEventType;
 import com.ganesh.fleetdispatch.graph.Route;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -16,6 +19,7 @@ public final class DriverRecoveryWorker {
     private final DriverRecoveryQueue recoveryQueue;
     private final RecoveryCandidateSelector candidateSelector;
     private final RecoveryCandidateSelector.RouteFinder routeFinder;
+    private final FleetEventPublisher eventPublisher;
     private final ConcurrentHashMap<Long, Object> driverLocks = new ConcurrentHashMap<>();
 
     public DriverRecoveryWorker(
@@ -25,12 +29,31 @@ public final class DriverRecoveryWorker {
             DriverRecoveryQueue recoveryQueue,
             RecoveryCandidateSelector candidateSelector,
             RecoveryCandidateSelector.RouteFinder routeFinder) {
+        this(
+                driverStateStore,
+                orderStateStore,
+                driverRouteStore,
+                recoveryQueue,
+                candidateSelector,
+                routeFinder,
+                null);
+    }
+
+    public DriverRecoveryWorker(
+            DriverStateStore driverStateStore,
+            OrderStateStore orderStateStore,
+            DriverRouteStore driverRouteStore,
+            DriverRecoveryQueue recoveryQueue,
+            RecoveryCandidateSelector candidateSelector,
+            RecoveryCandidateSelector.RouteFinder routeFinder,
+            FleetEventPublisher eventPublisher) {
         this.driverStateStore = Objects.requireNonNull(driverStateStore, "driverStateStore");
         this.orderStateStore = Objects.requireNonNull(orderStateStore, "orderStateStore");
         this.driverRouteStore = Objects.requireNonNull(driverRouteStore, "driverRouteStore");
         this.recoveryQueue = Objects.requireNonNull(recoveryQueue, "recoveryQueue");
         this.candidateSelector = Objects.requireNonNull(candidateSelector, "candidateSelector");
         this.routeFinder = Objects.requireNonNull(routeFinder, "routeFinder");
+        this.eventPublisher = eventPublisher;
     }
 
     /** Processes one queued recovery task. Failed attempts remain in the queue for a later retry. */
@@ -45,8 +68,8 @@ public final class DriverRecoveryWorker {
     /**
      * Processes up to maxItems from one queue snapshot.
      *
-     * <p>A temporarily blocked task no longer prevents later recoveries from
-     * being attempted in the same batch. Unassignable tasks are requeued by
+     * <p>A temporarily blocked task no longer prevents later recoveries from being
+     * attempted in the same batch. Unassignable tasks are requeued by
      * {@link #processTask(DriverRecoveryTask)}.</p>
      */
     public List<RecoveryAssignment> processBatch(int maxItems) {
@@ -102,11 +125,13 @@ public final class DriverRecoveryWorker {
                                         new RouteStop(task.orderId(), RouteStopType.HANDOFF, task.handoffNode()),
                                         new RouteStop(task.orderId(), RouteStopType.DROPOFF, assignedOrder.dropoffNode()))));
 
-                return Optional.of(new RecoveryAssignment(
+                RecoveryAssignment assignment = new RecoveryAssignment(
                         task.orderId(),
                         driver.id(),
                         currentHandoffRoute.get(),
-                        candidate.handoffToDropoffRoute()));
+                        candidate.handoffToDropoffRoute());
+                publishAssignedEvent(task, assignment);
+                return Optional.of(assignment);
             }
         }
 
@@ -115,5 +140,23 @@ public final class DriverRecoveryWorker {
             recoveryQueue.enqueue(task);
         }
         return Optional.empty();
+    }
+
+    private void publishAssignedEvent(DriverRecoveryTask task, RecoveryAssignment assignment) {
+        if (eventPublisher == null) {
+            return;
+        }
+
+        eventPublisher.publish(
+                FleetEventType.ORDER_RECOVERY_ASSIGNED,
+                "order-" + assignment.orderId(),
+                "ORDER",
+                Map.of(
+                        "orderId", assignment.orderId(),
+                        "replacementDriverId", assignment.replacementDriverId(),
+                        "failedDriverId", task.failedDriverId(),
+                        "handoffNode", task.handoffNode().value(),
+                        "driverToHandoffDistanceMeters", assignment.driverToHandoffRoute().distanceMeters(),
+                        "handoffToDropoffDistanceMeters", assignment.handoffToDropoffRoute().distanceMeters()));
     }
 }
