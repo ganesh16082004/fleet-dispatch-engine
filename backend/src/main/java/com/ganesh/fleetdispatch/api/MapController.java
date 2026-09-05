@@ -17,36 +17,36 @@ import java.util.Map;
 @RequestMapping("/api/v1/map")
 public class MapController {
     private final RoadGraph graph;
+    private final Map<String, Object> metadata;
 
     public MapController(RoadGraph graph) {
         this.graph = graph;
+        this.metadata = buildMetadata(graph);
     }
 
+    /**
+     * Lightweight endpoint for the dashboard. It exposes the exact boundary and
+     * graph counts without serializing 1M+ road edges on every refresh.
+     */
+    @GetMapping("/metadata")
+    public Map<String, Object> metadata() {
+        return metadata;
+    }
+
+    /**
+     * Full graph payload. Kept for diagnostics and one-time local inspection;
+     * the live dashboard should use /metadata instead of polling this endpoint.
+     */
     @GetMapping("/geojson")
     public Map<String, Object> geoJson() {
         List<Map<String, Object>> features = new ArrayList<>(graph.edgeCount());
         Map<Long, List<Double>> nodeCoordinates = new LinkedHashMap<>(graph.nodeCount());
-
-        double latitudeSum = 0.0;
-        double longitudeSum = 0.0;
-        double minLatitude = Double.POSITIVE_INFINITY;
-        double maxLatitude = Double.NEGATIVE_INFINITY;
-        double minLongitude = Double.POSITIVE_INFINITY;
-        double maxLongitude = Double.NEGATIVE_INFINITY;
-        int coordinateCount = 0;
 
         for (RoadNode node : graph.nodes().values()) {
             Location location = node.location();
             nodeCoordinates.put(
                     node.id().value(),
                     List.of(location.longitude(), location.latitude()));
-            latitudeSum += location.latitude();
-            longitudeSum += location.longitude();
-            minLatitude = Math.min(minLatitude, location.latitude());
-            maxLatitude = Math.max(maxLatitude, location.latitude());
-            minLongitude = Math.min(minLongitude, location.longitude());
-            maxLongitude = Math.max(maxLongitude, location.longitude());
-            coordinateCount++;
         }
 
         for (RoadEdge edge : graph.nodes().values().stream()
@@ -76,12 +76,6 @@ public class MapController {
                     "properties", properties));
         }
 
-        double centerLatitude = coordinateCount == 0 ? 12.9716 : latitudeSum / coordinateCount;
-        double centerLongitude = coordinateCount == 0 ? 77.5946 : longitudeSum / coordinateCount;
-        List<Double> bounds = coordinateCount == 0
-                ? List.of(77.5946, 12.9716, 77.5946, 12.9716)
-                : List.of(minLongitude, minLatitude, maxLongitude, maxLatitude);
-
         Map<String, Object> roads = Map.of(
                 "type", "FeatureCollection",
                 "features", features);
@@ -89,6 +83,39 @@ public class MapController {
         return Map.of(
                 "roads", roads,
                 "nodes", nodeCoordinates,
+                "center", metadata.get("center"),
+                "bounds", metadata.get("bounds"),
+                "nodeCount", graph.nodeCount(),
+                "edgeCount", graph.edgeCount());
+    }
+
+    private static Map<String, Object> buildMetadata(RoadGraph graph) {
+        double latitudeSum = 0.0;
+        double longitudeSum = 0.0;
+        double minLatitude = Double.POSITIVE_INFINITY;
+        double maxLatitude = Double.NEGATIVE_INFINITY;
+        double minLongitude = Double.POSITIVE_INFINITY;
+        double maxLongitude = Double.NEGATIVE_INFINITY;
+        int coordinateCount = 0;
+
+        for (RoadNode node : graph.nodes().values()) {
+            Location location = node.location();
+            latitudeSum += location.latitude();
+            longitudeSum += location.longitude();
+            minLatitude = Math.min(minLatitude, location.latitude());
+            maxLatitude = Math.max(maxLatitude, location.latitude());
+            minLongitude = Math.min(minLongitude, location.longitude());
+            maxLongitude = Math.max(maxLongitude, location.longitude());
+            coordinateCount++;
+        }
+
+        double centerLatitude = coordinateCount == 0 ? 12.9716 : latitudeSum / coordinateCount;
+        double centerLongitude = coordinateCount == 0 ? 77.5946 : longitudeSum / coordinateCount;
+        List<Double> bounds = coordinateCount == 0
+                ? List.of(77.5946, 12.9716, 77.5946, 12.9716)
+                : List.of(minLongitude, minLatitude, maxLongitude, maxLatitude);
+
+        return Map.of(
                 "center", List.of(centerLatitude, centerLongitude),
                 "bounds", bounds,
                 "nodeCount", graph.nodeCount(),
