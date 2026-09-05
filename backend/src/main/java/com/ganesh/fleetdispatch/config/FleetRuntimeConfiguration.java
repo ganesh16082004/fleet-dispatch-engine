@@ -93,7 +93,8 @@ public class FleetRuntimeConfiguration {
     @Bean
     public RecoveryCandidateSelector recoveryCandidateSelector(
             DriverStateStore driverStateStore,
-            Router router) {
+            Router router,
+            com.ganesh.fleetdispatch.graph.RoadGraph graph) {
         return new RecoveryCandidateSelector(
                 driverStateStore,
                 (source, target) -> {
@@ -102,7 +103,8 @@ public class FleetRuntimeConfiguration {
                     } catch (IllegalArgumentException exception) {
                         return Optional.empty();
                     }
-                });
+                },
+                graph);
     }
 
     @Bean
