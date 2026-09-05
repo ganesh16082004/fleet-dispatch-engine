@@ -16,12 +16,16 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/map")
 public class MapController {
+    private static final int DASHBOARD_EDGE_LIMIT = 6000;
+
     private final RoadGraph graph;
     private final Map<String, Object> metadata;
+    private final Map<String, Object> dashboardGraph;
 
     public MapController(RoadGraph graph) {
         this.graph = graph;
         this.metadata = buildMetadata(graph);
+        this.dashboardGraph = buildDashboardGraph(graph, metadata);
     }
 
     /**
@@ -34,46 +38,67 @@ public class MapController {
     }
 
     /**
-     * Full graph payload. Kept for diagnostics and one-time local inspection;
-     * the live dashboard should use /metadata instead of polling this endpoint.
+     * Dashboard graph payload. The routing engine keeps the complete graph in
+     * memory; the browser receives a deterministic visual sample derived from
+     * that exact graph so Leaflet does not need to render 1.2M vector features.
      */
     @GetMapping("/geojson")
     public Map<String, Object> geoJson() {
-        List<Map<String, Object>> features = new ArrayList<>(graph.edgeCount());
-        Map<Long, List<Double>> nodeCoordinates = new LinkedHashMap<>(graph.nodeCount());
+        return dashboardGraph;
+    }
 
+    private static Map<String, Object> buildDashboardGraph(
+            RoadGraph graph,
+            Map<String, Object> metadata) {
+        List<Map<String, Object>> features = new ArrayList<>(DASHBOARD_EDGE_LIMIT);
+        Map<Long, List<Double>> nodeCoordinates = new LinkedHashMap<>();
+        int totalEdges = graph.edgeCount();
+        int stride = Math.max(1, (int) Math.ceil((double) totalEdges / DASHBOARD_EDGE_LIMIT));
+        int edgeIndex = 0;
+
+        outer:
         for (RoadNode node : graph.nodes().values()) {
-            Location location = node.location();
-            nodeCoordinates.put(
-                    node.id().value(),
-                    List.of(location.longitude(), location.latitude()));
-        }
+            for (RoadEdge edge : graph.outgoing(node.id())) {
+                if (edgeIndex++ % stride != 0) {
+                    continue;
+                }
 
-        for (RoadEdge edge : graph.nodes().values().stream()
-                .flatMap(node -> graph.outgoing(node.id()).stream())
-                .toList()) {
-            RoadNode from = graph.node(edge.from());
-            RoadNode to = graph.node(edge.to());
-            if (from == null || to == null) {
-                continue;
+                RoadNode from = graph.node(edge.from());
+                RoadNode to = graph.node(edge.to());
+                if (from == null || to == null) {
+                    continue;
+                }
+
+                Location fromLocation = from.location();
+                Location toLocation = to.location();
+                nodeCoordinates.putIfAbsent(
+                        from.id().value(),
+                        List.of(fromLocation.longitude(), fromLocation.latitude()));
+                nodeCoordinates.putIfAbsent(
+                        to.id().value(),
+                        List.of(toLocation.longitude(), toLocation.latitude()));
+
+                Map<String, Object> geometry = Map.of(
+                        "type", "LineString",
+                        "coordinates", List.of(
+                                List.of(fromLocation.longitude(), fromLocation.latitude()),
+                                List.of(toLocation.longitude(), toLocation.latitude())));
+
+                Map<String, Object> properties = Map.of(
+                        "from", edge.from().value(),
+                        "to", edge.to().value(),
+                        "distanceMeters", edge.distanceMeters(),
+                        "travelTimeSeconds", edge.travelTimeSeconds());
+
+                features.add(Map.of(
+                        "type", "Feature",
+                        "geometry", geometry,
+                        "properties", properties));
+
+                if (features.size() >= DASHBOARD_EDGE_LIMIT) {
+                    break outer;
+                }
             }
-
-            Map<String, Object> geometry = Map.of(
-                    "type", "LineString",
-                    "coordinates", List.of(
-                            List.of(from.location().longitude(), from.location().latitude()),
-                            List.of(to.location().longitude(), to.location().latitude())));
-
-            Map<String, Object> properties = Map.of(
-                    "from", edge.from().value(),
-                    "to", edge.to().value(),
-                    "distanceMeters", edge.distanceMeters(),
-                    "travelTimeSeconds", edge.travelTimeSeconds());
-
-            features.add(Map.of(
-                    "type", "Feature",
-                    "geometry", geometry,
-                    "properties", properties));
         }
 
         Map<String, Object> roads = Map.of(
@@ -86,7 +111,8 @@ public class MapController {
                 "center", metadata.get("center"),
                 "bounds", metadata.get("bounds"),
                 "nodeCount", graph.nodeCount(),
-                "edgeCount", graph.edgeCount());
+                "edgeCount", graph.edgeCount(),
+                "renderedEdgeCount", features.size());
     }
 
     private static Map<String, Object> buildMetadata(RoadGraph graph) {
