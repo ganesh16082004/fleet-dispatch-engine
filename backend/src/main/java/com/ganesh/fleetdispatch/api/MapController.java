@@ -29,6 +29,10 @@ public class MapController {
 
         double latitudeSum = 0.0;
         double longitudeSum = 0.0;
+        double minLatitude = Double.POSITIVE_INFINITY;
+        double maxLatitude = Double.NEGATIVE_INFINITY;
+        double minLongitude = Double.POSITIVE_INFINITY;
+        double maxLongitude = Double.NEGATIVE_INFINITY;
         int coordinateCount = 0;
 
         for (RoadNode node : graph.nodes().values()) {
@@ -38,6 +42,10 @@ public class MapController {
                     List.of(location.longitude(), location.latitude()));
             latitudeSum += location.latitude();
             longitudeSum += location.longitude();
+            minLatitude = Math.min(minLatitude, location.latitude());
+            maxLatitude = Math.max(maxLatitude, location.latitude());
+            minLongitude = Math.min(minLongitude, location.longitude());
+            maxLongitude = Math.max(maxLongitude, location.longitude());
             coordinateCount++;
         }
 
@@ -70,6 +78,9 @@ public class MapController {
 
         double centerLatitude = coordinateCount == 0 ? 12.9716 : latitudeSum / coordinateCount;
         double centerLongitude = coordinateCount == 0 ? 77.5946 : longitudeSum / coordinateCount;
+        List<Double> bounds = coordinateCount == 0
+                ? List.of(77.5946, 12.9716, 77.5946, 12.9716)
+                : List.of(minLongitude, minLatitude, maxLongitude, maxLatitude);
 
         Map<String, Object> roads = Map.of(
                 "type", "FeatureCollection",
@@ -79,6 +90,7 @@ public class MapController {
                 "roads", roads,
                 "nodes", nodeCoordinates,
                 "center", List.of(centerLatitude, centerLongitude),
+                "bounds", bounds,
                 "nodeCount", graph.nodeCount(),
                 "edgeCount", graph.edgeCount());
     }
