@@ -4,14 +4,22 @@ import com.ganesh.fleetdispatch.dispatch.CandidateSelector;
 import com.ganesh.fleetdispatch.dispatch.DispatchEngine;
 import com.ganesh.fleetdispatch.dispatch.InMemoryDriverStateStore;
 import com.ganesh.fleetdispatch.dispatch.InMemoryOrderStateStore;
+import com.ganesh.fleetdispatch.dispatch.Driver;
 import com.ganesh.fleetdispatch.dispatch.DriverStateStore;
+import com.ganesh.fleetdispatch.dispatch.DriverStatus;
+import com.ganesh.fleetdispatch.dispatch.Order;
 import com.ganesh.fleetdispatch.dispatch.OrderStateStore;
+import com.ganesh.fleetdispatch.dispatch.OrderStatus;
 import com.ganesh.fleetdispatch.graph.CsvRoadNetworkLoader;
 import com.ganesh.fleetdispatch.graph.RoadEdge;
 import com.ganesh.fleetdispatch.graph.RoadGraph;
 import com.ganesh.fleetdispatch.graph.RoadNode;
 import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.domain.Location;
+import com.ganesh.fleetdispatch.persistence.DriverDocument;
+import com.ganesh.fleetdispatch.persistence.DriverRepository;
+import com.ganesh.fleetdispatch.persistence.OrderDocument;
+import com.ganesh.fleetdispatch.persistence.OrderRepository;
 import com.ganesh.fleetdispatch.routing.AStarRouter;
 import com.ganesh.fleetdispatch.routing.Router;
 import org.slf4j.Logger;
@@ -49,13 +57,49 @@ public class FleetEngineConfiguration {
     }
 
     @Bean
-    public DriverStateStore driverStateStore(RoadGraph graph) {
-        return new InMemoryDriverStateStore(graph);
+    public DriverStateStore driverStateStore(
+            RoadGraph graph,
+            DriverRepository driverRepository) {
+        InMemoryDriverStateStore store = new InMemoryDriverStateStore(graph);
+        int restored = 0;
+        for (DriverDocument document : driverRepository.findAll()) {
+            try {
+                DriverStatus status = DriverStatus.valueOf(document.status());
+                store.addDriver(new Driver(
+                        document.id(),
+                        new NodeId(document.currentNode()),
+                        status));
+                restored++;
+            } catch (IllegalArgumentException exception) {
+                log.warn("Skipping persisted driver {} because its state is invalid: {}", document.id(), exception.getMessage());
+            }
+        }
+        log.info("Restored {} persisted drivers into runtime dispatch state", restored);
+        return store;
     }
 
     @Bean
-    public OrderStateStore orderStateStore() {
-        return new InMemoryOrderStateStore();
+    public OrderStateStore orderStateStore(OrderRepository orderRepository) {
+        InMemoryOrderStateStore store = new InMemoryOrderStateStore();
+        int restored = 0;
+        for (OrderDocument document : orderRepository.findAll()) {
+            try {
+                OrderStatus status = OrderStatus.valueOf(document.status());
+                store.restoreOrder(
+                        new Order(
+                                document.id(),
+                                new NodeId(document.pickupNode()),
+                                new NodeId(document.dropoffNode()),
+                                document.requestTimestamp(),
+                                status),
+                        document.assignedDriverId());
+                restored++;
+            } catch (IllegalArgumentException exception) {
+                log.warn("Skipping persisted order {} because its state is invalid: {}", document.id(), exception.getMessage());
+            }
+        }
+        log.info("Restored {} persisted orders into runtime lifecycle state", restored);
+        return store;
     }
 
     @Bean
