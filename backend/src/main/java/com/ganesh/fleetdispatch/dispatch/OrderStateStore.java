@@ -7,6 +7,14 @@ import java.util.OptionalLong;
 public interface OrderStateStore {
     void addOrder(Order order);
 
+    /** Restores persisted lifecycle state after application startup. */
+    default void restoreOrder(Order order, Long assignedDriverId) {
+        addOrder(order);
+        if (assignedDriverId != null && order.status() == OrderStatus.ASSIGNED) {
+            tryAssign(order.id(), assignedDriverId);
+        }
+    }
+
     Optional<Order> getOrder(long orderId);
 
     /** Atomically claims a CREATED order for a driver and transitions it to ASSIGNED. */
