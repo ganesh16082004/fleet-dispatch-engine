@@ -12,6 +12,7 @@ import com.ganesh.fleetdispatch.persistence.DriverRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -79,7 +80,9 @@ public class DriverService {
     }
 
     public List<DriverDocument> findAll() {
-        return driverRepository.findAll();
+        return driverRepository.findAll().stream()
+                .sorted(Comparator.comparingLong(DriverDocument::id).reversed())
+                .toList();
     }
 
     public DriverDocument findById(long id) {
