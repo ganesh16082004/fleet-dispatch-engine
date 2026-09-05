@@ -56,7 +56,16 @@ public class FleetEngineConfiguration {
             return graph;
         }
 
-        log.warn("Road-network CSV files not found (nodes={}, edges={}); using demo graph", nodes.toAbsolutePath(), edges.toAbsolutePath());
+        if (!booleanProperty("FLEET_ALLOW_DEMO_GRAPH", true)) {
+            throw new IllegalStateException(
+                    "Road-network CSV files are required but were not found. "
+                            + "Expected nodes=" + nodes.toAbsolutePath()
+                            + " and edges=" + edges.toAbsolutePath()
+                            + ". Set FLEET_NODES_FILE/FLEET_EDGES_FILE to the mounted production graph files.");
+        }
+
+        log.warn("Road-network CSV files not found (nodes={}, edges={}); using demo graph because FLEET_ALLOW_DEMO_GRAPH=true",
+                nodes.toAbsolutePath(), edges.toAbsolutePath());
         return demoGraph();
     }
 
@@ -147,6 +156,23 @@ public class FleetEngineConfiguration {
             return environment.trim();
         }
         return defaultValue;
+    }
+
+    private static boolean booleanProperty(String key, boolean defaultValue) {
+        String value = System.getProperty(key);
+        if (value == null || value.isBlank()) {
+            value = System.getenv(key);
+        }
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+        if ("true".equalsIgnoreCase(value.trim())) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(value.trim())) {
+            return false;
+        }
+        throw new IllegalArgumentException(key + " must be true or false");
     }
 
     private static RoadGraph demoGraph() {
