@@ -3,6 +3,7 @@ package com.ganesh.fleetdispatch.config;
 import com.ganesh.fleetdispatch.dispatch.DashboardWebSocketHandler;
 import com.ganesh.fleetdispatch.dispatch.DriverLocationMessageCodec;
 import com.ganesh.fleetdispatch.dispatch.DriverLocationTracker;
+import com.ganesh.fleetdispatch.dispatch.DriverLocationWebSocketHandler;
 import com.ganesh.fleetdispatch.dispatch.DriverStateStore;
 import com.ganesh.fleetdispatch.dispatch.DriverHeartbeatStore;
 import org.springframework.context.annotation.Bean;
