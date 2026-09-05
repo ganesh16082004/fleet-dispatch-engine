@@ -184,6 +184,18 @@ public final class DispatchEngine {
         return orderStateStore.tryCancel(orderId);
     }
 
+    /** Removes a completed order from its driver's active route and normalizes the driver's runtime status. */
+    public void completeOrder(long driverId, long orderId) {
+        if (driverId < 0 || orderId < 0) {
+            throw new IllegalArgumentException("driverId and orderId must be non-negative");
+        }
+
+        synchronized (driverDispatchLocks.computeIfAbsent(driverId, ignored -> new Object())) {
+            removeOrderFromRoute(driverId, orderId);
+            normalizeDriverStatus(driverId);
+        }
+    }
+
     /**
      * Marks a failed driver OFFLINE, requeues its ASSIGNED orders, clears its route,
      * and attempts to dispatch those orders to alternative drivers.
