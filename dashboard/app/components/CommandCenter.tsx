@@ -259,16 +259,41 @@ export default function CommandCenter() {
     scenarioTimersRef.current = [];
     scenarioDriverNodesRef.current.clear();
 
-    const primaryPair = roadPairs[0];
-    const pickupCoordinate = graph.nodes[String(primaryPair[0])];
-    if (!pickupCoordinate) {
-      setScenarioMessage("Scenario stopped: primary pickup node is not renderable");
+    const persistedAvailableDrivers = Object.values(drivers)
+      .filter((driver) => driver.status === "AVAILABLE")
+      .map((driver) => driver.currentNode)
+      .filter((node) => Number.isFinite(node));
+
+    const sampledPairs = 5_000;
+    const step = Math.max(1, Math.ceil(roadPairs.length / sampledPairs));
+    let primaryPair: [number, number] | null = null;
+    let pickupCoordinate: [number, number] | undefined;
+
+    for (let index = 0; index < roadPairs.length; index += step) {
+      const pair = roadPairs[index];
+      const coordinate = graph.nodes[String(pair[0])];
+      if (!coordinate) continue;
+      const nearestPersistedDriverDistance = persistedAvailableDrivers.length === 0
+        ? Number.POSITIVE_INFINITY
+        : Math.min(...persistedAvailableDrivers.map((node) => {
+            const driverCoordinate = graph.nodes[String(node)];
+            return driverCoordinate ? haversineMeters(coordinate, driverCoordinate) : Number.POSITIVE_INFINITY;
+          }));
+      if (nearestPersistedDriverDistance > 3_000) {
+        primaryPair = pair;
+        pickupCoordinate = coordinate;
+        break;
+      }
+    }
+
+    if (!primaryPair || !pickupCoordinate) {
+      setScenarioMessage("Scenario stopped: could not find an isolated pickup zone away from persisted available drivers");
       setScenarioRunning(false);
       return;
     }
 
     const nearbyNodes = Object.entries(graph.nodes)
-      .map(([id, coordinate]) => ({ id: Number(id), coordinate, distance: haversineMeters(pickupCoordinate, coordinate) }))
+      .map(([id, coordinate]) => ({ id: Number(id), coordinate, distance: haversineMeters(pickupCoordinate!, coordinate) }))
       .filter((item) => Number.isFinite(item.distance) && item.distance <= 1_900)
       .sort((a, b) => a.distance - b.distance)
       .map((item) => item.id)
@@ -289,7 +314,7 @@ export default function CommandCenter() {
     const primaryOrderId = Math.floor(Date.now() / 1000) + 900000;
 
     try {
-      setScenarioMessage("1 / 6 · registering six drivers around the pickup zone…");
+      setScenarioMessage("1 / 6 · registering six drivers in an isolated road-network zone…");
       for (let index = 0; index < ids.length; index++) {
         await post("/api/v1/drivers", { id: ids[index], currentNode: nearbyNodes[index], status: "AVAILABLE" });
       }
@@ -302,9 +327,12 @@ export default function CommandCenter() {
       });
       if (!created) throw new Error("Primary order was not created");
 
-      setScenarioMessage("3 / 6 · route-aware dispatch selecting the nearest feasible driver…");
+      setScenarioMessage("3 / 6 · route-aware dispatch selecting the nearest demo driver…");
       const assigned = await post<Order>(`/api/v1/orders/${primaryOrderId}/dispatch`);
       if (!assigned?.assignedDriverId) throw new Error("No feasible driver was found for the demo order");
+      if (!ids.includes(assigned.assignedDriverId)) {
+        throw new Error(`Dispatch selected unexpected persisted driver #${assigned.assignedDriverId}; scenario isolation failed`);
+      }
       const failedDriverId = assigned.assignedDriverId;
       const failedNodeId = scenarioDriverNodesRef.current.get(failedDriverId) ?? primaryPair[0];
       if (assigned.route?.length) orderRoutesRef.current.set(primaryOrderId, assigned.route);
