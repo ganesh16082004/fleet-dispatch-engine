@@ -9,13 +9,18 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 public class WebConfig implements WebMvcConfigurer {
     private final String[] allowedOrigins;
 
-    public WebConfig(@Value("${fleet.api.allowed-origins:http://localhost:3000,http://127.0.0.1:3000}") String allowedOrigins) {
+    public WebConfig(@Value("${fleet.api.allowed-origins:http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001}") String allowedOrigins) {
         this.allowedOrigins = allowedOrigins.split(",");
     }
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
+                .allowedOriginPatterns(
+                        "http://localhost:*",
+                        "http://127.0.0.1:*",
+                        "https://localhost:*",
+                        "https://127.0.0.1:*")
                 .allowedOrigins(allowedOrigins)
                 .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
