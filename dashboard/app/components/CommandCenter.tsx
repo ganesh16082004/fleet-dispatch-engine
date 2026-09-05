@@ -11,7 +11,7 @@ type Summary = {
   pickedUpOrders: number; recoveryOrders: number; completedOrders: number; cancelledOrders: number;
   activeOrders: number; pendingOutboxEvents: number; failedOutboxEvents: number;
 };
-type EventItem = { eventId: string; eventType: string; aggregateId: string; aggregateType: string; createdAt: string; publishedAt?: string | null; attempts: number; status: string; payload?: Record<string, unknown> };
+type EventItem = { eventId: string; eventType: string; aggregateId: string; aggregateType: string; createdAt: string; payload?: Record<string, unknown> };
 type LiveLocation = { driverId: number; nodeId: number; sequenceNumber: number; timestampMillis: number };
 type DashboardGraph = MapGraph & { roads: GeoJSON.FeatureCollection<GeoJSON.LineString, Record<string, unknown>> };
 
@@ -32,6 +32,18 @@ const timeLabel = (value?: string | number | null) => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 };
+
+function haversineMeters(a: [number, number], b: [number, number]) {
+  const toRad = (value: number) => value * Math.PI / 180;
+  const lat1 = toRad(a[0]);
+  const lat2 = toRad(b[0]);
+  const dLat = toRad(b[0] - a[0]);
+  const dLon = toRad(b[1] - a[1]);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLon = Math.sin(dLon / 2);
+  const h = sinLat * sinLat + Math.cos(lat1) * Math.cos(lat2) * sinLon * sinLon;
+  return 6_371_000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
 
 async function fetchJson<T>(path: string): Promise<T | null> {
   try {
@@ -70,10 +82,12 @@ export default function CommandCenter() {
   const [scenarioMessage, setScenarioMessage] = useState("Live Bengaluru operations console");
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [scenarioDriverIds, setScenarioDriverIds] = useState<number[]>([]);
+
   const socketsRef = useRef<Map<number, WebSocket>>(new Map());
   const sequenceRef = useRef<Map<number, number>>(new Map());
   const telemetryTimerRef = useRef<number | null>(null);
   const scenarioTimersRef = useRef<number[]>([]);
+  const scenarioDriverNodesRef = useRef<Map<number, number>>(new Map());
   const graphLoadedRef = useRef(false);
   const orderRoutesRef = useRef<Map<number, number[]>>(new Map());
 
@@ -113,10 +127,12 @@ export default function CommandCenter() {
       }
     }
 
-    setScenarioMessage((current) => healthy && current.startsWith("Backend unavailable") ? "Live Bengaluru operations console" : current);
+    if (healthy && scenarioMessage.startsWith("Backend unavailable")) {
+      setScenarioMessage("Live Bengaluru operations console");
+    }
     if (!healthy) setScenarioMessage("Backend unavailable — check Spring Boot on :8080");
     setLastRefresh(Date.now());
-  }, []);
+  }, [scenarioMessage]);
 
   useEffect(() => {
     void load();
@@ -142,7 +158,7 @@ export default function CommandCenter() {
           try {
             const packet = JSON.parse(message.data as string) as { type?: string; drivers?: Driver[] } & LiveLocation;
             if (packet.type === "snapshot" && Array.isArray(packet.drivers)) {
-              setDrivers((current) => ({ ...current, ...Object.fromEntries(packet.drivers!.map((driver) => [driver.id, driver])) }));
+              setDrivers((current) => ({ ...current, ...Object.fromEntries(packet.drivers.map((driver) => [driver.id, driver])) }));
             }
             if (packet.type === "location" || typeof packet.driverId === "number") {
               const live: LiveLocation = {
@@ -158,7 +174,7 @@ export default function CommandCenter() {
               });
             }
           } catch {
-            // Ignore malformed dashboard packets.
+            // Ignore malformed packets.
           }
         };
       } catch {
@@ -179,27 +195,33 @@ export default function CommandCenter() {
     for (const socket of socketsRef.current.values()) socket.close();
   }, []);
 
+  const graphNodeIds = useMemo(() => graph ? Object.keys(graph.nodes).map(Number) : [], [graph]);
+  const roadPairs = useMemo(() => {
+    if (!graph) return [] as Array<[number, number]>;
+    return graph.roads.features.map((feature) => {
+      const properties = feature.properties as Record<string, unknown>;
+      const from = Number(properties.from);
+      const to = Number(properties.to);
+      return Number.isFinite(from) && Number.isFinite(to) ? [from, to] as [number, number] : null;
+    }).filter((pair): pair is [number, number] => pair !== null);
+  }, [graph]);
+
   const driverList = useMemo(() => {
-    const rank = new Map(scenarioDriverIds.map((id, index) => [id, index]));
-    return Object.values(drivers).sort((a, b) => {
-      const ar = rank.has(a.id) ? rank.get(a.id)! : Number.MAX_SAFE_INTEGER;
-      const br = rank.has(b.id) ? rank.get(b.id)! : Number.MAX_SAFE_INTEGER;
-      return ar - br || b.id - a.id;
+    const scenarioSet = new Set(scenarioDriverIds);
+    const base = scenarioDriverIds.length > 0
+      ? Object.values(drivers).filter((driver) => scenarioSet.has(driver.id))
+      : Object.values(drivers);
+    return [...base].sort((a, b) => {
+      const ai = scenarioDriverIds.indexOf(a.id);
+      const bi = scenarioDriverIds.indexOf(b.id);
+      return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi) || b.id - a.id;
     });
   }, [drivers, scenarioDriverIds]);
+
   const visibleOrders = useMemo(() => [...orders].sort((a, b) => b.requestTimestamp - a.requestTimestamp).slice(0, 14), [orders]);
   const activeDrivers = summary.totalDrivers ? summary.totalDrivers - summary.offlineDrivers : driverList.filter((driver) => driver.status !== "OFFLINE").length;
   const utilization = summary.totalDrivers ? Math.round((summary.busyDrivers / summary.totalDrivers) * 100) : 0;
   const selectedOrder = orders.find((order) => order.id === selectedOrderId) ?? null;
-  const graphNodeIds = useMemo(() => graph ? Object.keys(graph.nodes).map(Number).sort((a, b) => a - b) : [], [graph]);
-  const roadPairs = useMemo(() => {
-    if (!graph) return [] as Array<[number, number]>;
-    return graph.roads.features.map((feature) => {
-      const p = feature.properties as Record<string, unknown>;
-      const from = Number(p.from); const to = Number(p.to);
-      return Number.isFinite(from) && Number.isFinite(to) ? [from, to] as [number, number] : null;
-    }).filter((pair): pair is [number, number] => pair !== null).slice(0, 10);
-  }, [graph]);
 
   const stopTelemetry = () => {
     if (telemetryTimerRef.current) window.clearInterval(telemetryTimerRef.current);
@@ -209,7 +231,7 @@ export default function CommandCenter() {
     sequenceRef.current.clear();
   };
 
-  const startTelemetry = (ids: number[], failedId: number) => {
+  const startTelemetry = (ids: number[]) => {
     stopTelemetry();
     for (const id of ids) {
       const socket = new WebSocket(`${DRIVER_WS_BASE}/${id}`);
@@ -218,57 +240,77 @@ export default function CommandCenter() {
     }
     telemetryTimerRef.current = window.setInterval(() => {
       for (const id of ids) {
-        if (id === failedId) continue;
         const socket = socketsRef.current.get(id);
         if (!socket || socket.readyState !== WebSocket.OPEN) continue;
         const seq = (sequenceRef.current.get(id) ?? 0) + 1;
         sequenceRef.current.set(id, seq);
-        const index = (ids.indexOf(id) * 3 + seq) % Math.max(graphNodeIds.length, 1);
-        const nodeId = graphNodeIds[index] ?? 101;
+        const nodeId = scenarioDriverNodesRef.current.get(id);
+        if (nodeId === undefined) continue;
         socket.send(JSON.stringify({ sequenceNumber: seq, nodeId, timestampMillis: Date.now() }));
       }
     }, 900);
   };
 
   const runLiveScenario = async () => {
-    if (scenarioRunning || !graph || roadPairs.length < 6) return;
+    if (scenarioRunning || !graph || roadPairs.length < 1) return;
     setScenarioRunning(true);
     stopTelemetry();
     for (const timer of scenarioTimersRef.current) window.clearTimeout(timer);
     scenarioTimersRef.current = [];
+    scenarioDriverNodesRef.current.clear();
 
-    const base = 50000 + Math.floor(Date.now() / 1000) % 10000;
-    const ids = Array.from({ length: 6 }, (_, index) => base + index);
-    setScenarioDriverIds(ids);
-    const orderBase = 800000 + (base % 80000);
     const primaryPair = roadPairs[0];
-    const secondaryPairs = roadPairs.slice(1, 4);
+    const pickupCoordinate = graph.nodes[String(primaryPair[0])];
+    if (!pickupCoordinate) {
+      setScenarioMessage("Scenario stopped: primary pickup node is not renderable");
+      setScenarioRunning(false);
+      return;
+    }
+
+    const nearbyNodes = Object.entries(graph.nodes)
+      .map(([id, coordinate]) => ({ id: Number(id), coordinate, distance: haversineMeters(pickupCoordinate, coordinate) }))
+      .filter((item) => Number.isFinite(item.distance) && item.distance <= 1_900)
+      .sort((a, b) => a.distance - b.distance)
+      .map((item) => item.id)
+      .filter((id, index, ids) => ids.indexOf(id) === index)
+      .slice(0, 6);
+
+    if (nearbyNodes.length < 6) {
+      setScenarioMessage("Scenario stopped: not enough nearby road-network nodes for the demo fleet");
+      setScenarioRunning(false);
+      return;
+    }
+
+    const base = Math.floor(Date.now() / 1000) * 10;
+    const ids = Array.from({ length: 6 }, (_, index) => base + index + 1);
+    ids.forEach((id, index) => scenarioDriverNodesRef.current.set(id, nearbyNodes[index]));
+    setScenarioDriverIds(ids);
+
+    const primaryOrderId = Math.floor(Date.now() / 1000) + 900000;
 
     try {
-      setScenarioMessage("1 / 6 · registering live Bengaluru fleet…");
-      await Promise.all(ids.map((id) => post("/api/v1/drivers", { id, currentNode: primaryPair[0], status: "AVAILABLE" })));
-
-      setScenarioMessage("2 / 6 · creating order and running route-aware dispatch…");
-      const primaryOrderId = orderBase;
-      const created = await post<Order>("/api/v1/orders", { id: primaryOrderId, pickupNode: primaryPair[0], dropoffNode: primaryPair[1] });
-      if (!created) throw new Error("Primary order was not created");
-      const assigned = await post<Order>(`/api/v1/orders/${primaryOrderId}/dispatch`);
-      if (!assigned?.assignedDriverId) throw new Error("Primary order could not be assigned");
-      const failedDriverId = assigned.assignedDriverId;
-      if (assigned.route?.length) orderRoutesRef.current.set(primaryOrderId, assigned.route);
-
-      for (let index = 0; index < secondaryPairs.length; index++) {
-        const id = orderBase + index + 1;
-        const [pickupNode, dropoffNode] = secondaryPairs[index];
-        await post("/api/v1/orders", { id, pickupNode, dropoffNode });
-        const response = await post<Order>(`/api/v1/orders/${id}/dispatch`);
-        if (response?.route?.length) orderRoutesRef.current.set(id, response.route);
+      setScenarioMessage("1 / 6 · registering six drivers around the pickup zone…");
+      for (let index = 0; index < ids.length; index++) {
+        await post("/api/v1/drivers", { id: ids[index], currentNode: nearbyNodes[index], status: "AVAILABLE" });
       }
 
-      startTelemetry(ids, failedDriverId);
+      setScenarioMessage("2 / 6 · creating order from the live road graph…");
+      const created = await post<Order>("/api/v1/orders", {
+        id: primaryOrderId,
+        pickupNode: primaryPair[0],
+        dropoffNode: primaryPair[1]
+      });
+      if (!created) throw new Error("Primary order was not created");
+
+      setScenarioMessage("3 / 6 · route-aware dispatch selecting the nearest feasible driver…");
+      const assigned = await post<Order>(`/api/v1/orders/${primaryOrderId}/dispatch`);
+      if (!assigned?.assignedDriverId) throw new Error("No feasible driver was found for the demo order");
+      const failedDriverId = assigned.assignedDriverId;
+      const failedNodeId = scenarioDriverNodesRef.current.get(failedDriverId) ?? primaryPair[0];
+      if (assigned.route?.length) orderRoutesRef.current.set(primaryOrderId, assigned.route);
+      startTelemetry(ids.filter((id) => id !== failedDriverId));
       await load();
       setSelectedOrderId(primaryOrderId);
-      setScenarioMessage(`3 / 6 · ORDER ASSIGNED → Driver #${failedDriverId}`);
 
       scenarioTimersRef.current.push(window.setTimeout(async () => {
         try {
@@ -283,7 +325,7 @@ export default function CommandCenter() {
 
       scenarioTimersRef.current.push(window.setTimeout(async () => {
         try {
-          setScenarioMessage(`5 / 6 · Driver #${failedDriverId} failure detected → recovery handoff`);
+          setScenarioMessage(`5 / 6 · Driver #${failedDriverId} failed → recovery engine finding replacement at Node ${failedNodeId}`);
           await post(`/api/v1/recovery/drivers/${failedDriverId}/fail`);
           await load();
         } catch (error) {
@@ -294,25 +336,18 @@ export default function CommandCenter() {
       scenarioTimersRef.current.push(window.setTimeout(async () => {
         try {
           let latest: Order | null = null;
-          for (let attempt = 0; attempt < 8; attempt++) {
-            const current = await fetchJson<Order>(`/api/v1/orders/${primaryOrderId}`);
-            latest = current;
-            if (current?.status === "ASSIGNED" && current.assignedDriverId && current.assignedDriverId !== failedDriverId) break;
-            await new Promise((resolve) => window.setTimeout(resolve, 750));
+          for (let attempt = 0; attempt < 12; attempt++) {
+            latest = await fetchJson<Order>(`/api/v1/orders/${primaryOrderId}`);
+            if (latest?.status === "ASSIGNED" && latest.assignedDriverId && latest.assignedDriverId !== failedDriverId) break;
+            await new Promise((resolve) => window.setTimeout(resolve, 500));
           }
-          await load();
           if (!latest?.assignedDriverId || latest.assignedDriverId === failedDriverId) {
-            throw new Error("Replacement driver was not assigned yet");
+            throw new Error("Recovery worker did not assign a replacement driver");
           }
+
           const replacementId = latest.assignedDriverId;
           setScenarioMessage(`5 / 6 · HANDOFF → replacement Driver #${replacementId}`);
-          const replacementSocket = socketsRef.current.get(replacementId);
-          const handoffNode = drivers[failedDriverId]?.currentNode;
-          if (replacementSocket?.readyState === WebSocket.OPEN && handoffNode) {
-            const seq = (sequenceRef.current.get(replacementId) ?? 0) + 1;
-            sequenceRef.current.set(replacementId, seq);
-            replacementSocket.send(JSON.stringify({ sequenceNumber: seq, nodeId: handoffNode, timestampMillis: Date.now() }));
-          }
+          await load();
 
           scenarioTimersRef.current.push(window.setTimeout(async () => {
             try {
@@ -320,9 +355,9 @@ export default function CommandCenter() {
               const pickup = await post<Order>(`/api/v1/orders/${primaryOrderId}/pickup`);
               if (pickup?.route?.length) orderRoutesRef.current.set(primaryOrderId, pickup.route);
               await new Promise((resolve) => window.setTimeout(resolve, 1200));
-              const complete = await post<Order>(`/api/v1/orders/${primaryOrderId}/complete`);
-              if (complete?.route?.length) orderRoutesRef.current.set(primaryOrderId, complete.route);
+              await post<Order>(`/api/v1/orders/${primaryOrderId}/complete`);
               setScenarioMessage(`COMPLETE · Order #${primaryOrderId} delivered by replacement Driver #${replacementId}`);
+              stopTelemetry();
               await load();
             } catch (error) {
               setScenarioMessage(error instanceof Error ? error.message : "Recovery completion failed");
@@ -343,16 +378,24 @@ export default function CommandCenter() {
     try {
       const response = await post<Order>(`/api/v1/orders/${order.id}/${action}`);
       if (response?.route?.length) orderRoutesRef.current.set(order.id, response.route);
+      if (response) {
+        setOrders((current) => current.map((item) => item.id === response.id
+          ? { ...response, route: response.route?.length ? response.route : orderRoutesRef.current.get(response.id) ?? item.route ?? [] }
+          : item));
+      }
       setSelectedOrderId(order.id);
       await load();
+      setScenarioMessage(`${action.toUpperCase()} complete · Order #${order.id}`);
     } catch (error) {
-      setScenarioMessage(error instanceof Error ? error.message : "Order action failed");
+      setScenarioMessage(error instanceof Error ? error.message : `${action} failed`);
     }
   };
 
   const eventCopy = (event: EventItem) => {
     const payload = event.payload ?? {};
-    const subject = event.aggregateType === "DRIVER" ? `Driver #${event.aggregateId.replace("driver-", "")}` : `Order #${event.aggregateId.replace("order-", "")}`;
+    const subject = event.aggregateType === "DRIVER"
+      ? `Driver #${event.aggregateId.replace("driver-", "")}`
+      : `Order #${event.aggregateId.replace("order-", "")}`;
     const state = String(payload.status ?? event.eventType).replaceAll("_", " ");
     return `${subject} · ${state}`;
   };
@@ -364,7 +407,7 @@ export default function CommandCenter() {
         <div className="top-actions">
           <div className={`system-pill ${backendUp ? "ok" : "bad"}`}><span />{backendUp ? "SYSTEM OPERATIONAL" : "BACKEND OFFLINE"}</div>
           <div className={`system-pill ${connected ? "ok" : "bad"}`}><span />{connected ? "LIVE TELEMETRY" : "API ONLY"}</div>
-          <button className="scenario-button" onClick={() => void runLiveScenario()} disabled={scenarioRunning || !graph || roadPairs.length < 6}>{scenarioRunning ? "Scenario running…" : "▶ Run full lifecycle"}</button>
+          <button className="scenario-button" onClick={() => void runLiveScenario()} disabled={scenarioRunning || !graph || roadPairs.length === 0}>{scenarioRunning ? "Scenario running…" : "▶ Run full lifecycle"}</button>
         </div>
       </header>
 
