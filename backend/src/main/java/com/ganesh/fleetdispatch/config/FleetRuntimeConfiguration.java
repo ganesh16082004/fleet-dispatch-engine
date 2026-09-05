@@ -24,6 +24,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.net.InetSocketAddress;
+import java.util.Optional;
 
 @Configuration
 public class FleetRuntimeConfiguration {
@@ -93,7 +94,15 @@ public class FleetRuntimeConfiguration {
     public RecoveryCandidateSelector recoveryCandidateSelector(
             DriverStateStore driverStateStore,
             Router router) {
-        return new RecoveryCandidateSelector(driverStateStore, router::findRoute);
+        return new RecoveryCandidateSelector(
+                driverStateStore,
+                (source, target) -> {
+                    try {
+                        return Optional.of(router.findRoute(source, target));
+                    } catch (IllegalArgumentException exception) {
+                        return Optional.empty();
+                    }
+                });
     }
 
     @Bean
@@ -111,7 +120,13 @@ public class FleetRuntimeConfiguration {
                 driverRouteStore,
                 driverRecoveryQueue,
                 recoveryCandidateSelector,
-                router::findRoute,
+                (source, target) -> {
+                    try {
+                        return Optional.of(router.findRoute(source, target));
+                    } catch (IllegalArgumentException exception) {
+                        return Optional.empty();
+                    }
+                },
                 eventPublisher);
     }
 
