@@ -16,6 +16,10 @@ type LiveLocation = { driverId: number; nodeId: number; sequenceNumber: number; 
 type DriverMap = Record<number, Driver>;
 type LocationMap = Record<number, LiveLocation>;
 
+type DashboardGraph = MapGraph & {
+  roads: GeoJSON.FeatureCollection<GeoJSON.LineString, Record<string, unknown>>;
+};
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
 const DASHBOARD_WS = process.env.NEXT_PUBLIC_DASHBOARD_WS_URL ?? "ws://127.0.0.1:8088/dashboard";
 const DRIVER_WS_BASE = process.env.NEXT_PUBLIC_DRIVER_WS_BASE_URL ?? "ws://127.0.0.1:8087/drivers";
@@ -34,7 +38,7 @@ const timeLabel = (value?: string | number | null) => {
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 };
 
-async function post(path: string, body?: unknown) {
+async function post<T = unknown>(path: string, body?: unknown): Promise<T | null> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -44,7 +48,7 @@ async function post(path: string, body?: unknown) {
     const message = await response.text();
     throw new Error(message || `${response.status} ${response.statusText}`);
   }
-  return response.status === 204 ? null : response.json();
+  return response.status === 204 ? null : await response.json() as T;
 }
 
 export default function Home() {
@@ -53,7 +57,7 @@ export default function Home() {
   const [locations, setLocations] = useState<LocationMap>({});
   const [orders, setOrders] = useState<Order[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
-  const [graph, setGraph] = useState<MapGraph | null>(null);
+  const [graph, setGraph] = useState<DashboardGraph | null>(null);
   const [connected, setConnected] = useState(false);
   const [backendUp, setBackendUp] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<number | null>(null);
@@ -65,6 +69,7 @@ export default function Home() {
   const timerRef = useRef<number | null>(null);
   const failureTimersRef = useRef<number[]>([]);
   const graphLoadedRef = useRef(false);
+  const orderRoutesRef = useRef<Map<number, number[]>>(new Map());
 
   const load = useCallback(async () => {
     const fetchJson = async <T,>(path: string): Promise<T | null> => {
@@ -77,12 +82,11 @@ export default function Home() {
       }
     };
 
-    const healthResponse = await fetch(`${API_BASE}/actuator/health/readiness`, { cache: "no-store" }).catch(() => null);
-    const healthy = !!healthResponse?.ok;
+    // Use the normal API health endpoint for the browser. The actuator endpoint
+    // is useful for ops tooling but is not the dashboard's cross-origin probe.
+    const healthBody = await fetchJson<{ status?: string }>("/api/v1/health");
+    const healthy = healthBody?.status === "UP";
     setBackendUp(healthy);
-    if (!healthy) {
-      setScenarioMessage("Backend unavailable — check Spring Boot on :8080");
-    }
 
     const [summaryBody, driversBody, ordersBody, eventsBody] = await Promise.all([
       fetchJson<Summary>("/api/v1/dashboard/summary"),
@@ -91,6 +95,12 @@ export default function Home() {
       fetchJson<EventItem[]>("/api/v1/events/recent?limit=40")
     ]);
 
+    if (healthy) {
+      setScenarioMessage((current) => current.startsWith("Backend unavailable") ? "Live Bengaluru operations console" : current);
+    } else {
+      setScenarioMessage("Backend unavailable — check Spring Boot on :8080");
+    }
+
     if (summaryBody) setSummary(summaryBody);
     if (driversBody) {
       const next: DriverMap = {};
@@ -98,13 +108,17 @@ export default function Home() {
       setDrivers(next);
     }
     if (ordersBody) {
-      setOrders(ordersBody);
-      setSelectedOrderId((current) => current ?? ordersBody.find((order) => order.status === "ASSIGNED")?.id ?? null);
+      const mergedOrders = ordersBody.map((order) => ({
+        ...order,
+        route: order.route?.length ? order.route : orderRoutesRef.current.get(order.id) ?? []
+      }));
+      setOrders(mergedOrders);
+      setSelectedOrderId((current) => current ?? mergedOrders.find((order) => order.status === "ASSIGNED")?.id ?? null);
     }
     if (eventsBody) setEvents(eventsBody);
 
     if (!graphLoadedRef.current) {
-      const graphBody = await fetchJson<MapGraph>("/api/v1/map/geojson");
+      const graphBody = await fetchJson<DashboardGraph>("/api/v1/map/geojson");
       if (graphBody) {
         setGraph(graphBody);
         graphLoadedRef.current = true;
@@ -130,8 +144,8 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    load();
-    const interval = window.setInterval(load, 3000);
+    void load();
+    const interval = window.setInterval(() => void load(), 3000);
     return () => window.clearInterval(interval);
   }, [load]);
 
@@ -203,6 +217,18 @@ export default function Home() {
   const utilization = summary.totalDrivers ? Math.round((summary.busyDrivers / summary.totalDrivers) * 100) : 0;
   const selectedOrder = orders.find((order) => order.id === selectedOrderId) ?? null;
   const graphNodeIds = useMemo(() => graph ? Object.keys(graph.nodes).map(Number).sort((a, b) => a - b) : [], [graph]);
+  const roadPairs = useMemo(() => {
+    if (!graph) return [] as Array<[number, number]>;
+    return graph.roads.features
+      .map((feature) => {
+        const properties = feature.properties as Record<string, unknown>;
+        const from = Number(properties.from);
+        const to = Number(properties.to);
+        return Number.isFinite(from) && Number.isFinite(to) ? [from, to] as [number, number] : null;
+      })
+      .filter((pair): pair is [number, number] => pair !== null)
+      .slice(0, 7);
+  }, [graph]);
 
   const stopDriverStreams = () => {
     for (const socket of socketsRef.current.values()) socket.close();
@@ -238,7 +264,7 @@ export default function Home() {
   };
 
   const runLiveScenario = async () => {
-    if (scenarioRunning || !graph || graphNodeIds.length < 30) return;
+    if (scenarioRunning || !graph || graphNodeIds.length < 30 || roadPairs.length < 5) return;
     setScenarioRunning(true);
     setScenarioMessage("Provisioning a Bengaluru fleet…");
     stopDriverStreams();
@@ -248,46 +274,56 @@ export default function Home() {
     const base = 40000 + Math.floor(Date.now() / 1000) % 10000;
     const driverIds = Array.from({ length: 7 }, (_, index) => base + index);
     const failedDriverId = driverIds[3];
-    const chosenNodes = driverIds.map((_, index) => graphNodeIds[(index * 37) % graphNodeIds.length]);
+    const scenarioPairs = roadPairs.slice(0, 5);
     const orderBase = 700000 + (base % 80000);
 
     try {
+      const createdDrivers: number[] = [];
       for (let index = 0; index < driverIds.length; index++) {
         try {
-          await post("/api/v1/drivers", { id: driverIds[index], currentNode: chosenNodes[index], status: "AVAILABLE" });
-        } catch {
-          // Scenario IDs are unique; an existing record is harmless.
+          await post("/api/v1/drivers", { id: driverIds[index], currentNode: scenarioPairs[index % scenarioPairs.length][0], status: "AVAILABLE" });
+          createdDrivers.push(driverIds[index]);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "driver registration failed";
+          console.warn(`Driver #${driverIds[index]} registration skipped: ${message}`);
         }
       }
 
-      for (let index = 0; index < 10; index++) {
-        const pickupIndex = (index * 23 + 11) % graphNodeIds.length;
-        const dropoffIndex = (index * 31 + 57) % graphNodeIds.length;
+      if (createdDrivers.length < 5) {
+        throw new Error("Could not provision the demo fleet. Check the Spring Boot API and MongoDB connection.");
+      }
+
+      let dispatched = 0;
+      for (let index = 0; index < scenarioPairs.length; index++) {
+        const [pickupNode, dropoffNode] = scenarioPairs[index];
         const id = orderBase + index;
         try {
-          await post("/api/v1/orders", {
-            id,
-            pickupNode: graphNodeIds[pickupIndex],
-            dropoffNode: graphNodeIds[dropoffIndex]
-          });
-          try { await post(`/api/v1/orders/${id}/dispatch`); } catch { /* assignment may legitimately be unavailable */ }
-        } catch {
-          // Ignore individual duplicate/conflict records and continue the scenario.
+          await post("/api/v1/orders", { id, pickupNode, dropoffNode });
+          const dispatchResponse = await post<Order>(`/api/v1/orders/${id}/dispatch`);
+          if (dispatchResponse?.route?.length) orderRoutesRef.current.set(id, dispatchResponse.route);
+          dispatched++;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "order creation/dispatch failed";
+          console.warn(`Order #${id} skipped: ${message}`);
         }
       }
+
+      if (dispatched === 0) throw new Error("No demo orders could be dispatched. Check the backend order API.");
 
       setScenarioMessage(`LIVE · Bengaluru fleet active · Driver #${failedDriverId} will stop reporting in 14s`);
       startDriverStreams(driverIds, failedDriverId);
       await load();
-      failureTimersRef.current.push(window.setTimeout(() => load(), 10000));
+      failureTimersRef.current.push(window.setTimeout(() => void load(), 10000));
       failureTimersRef.current.push(window.setTimeout(() => {
         setScenarioMessage(`RECOVERY WINDOW · Driver #${failedDriverId} heartbeat lost · watch reassignment`);
-        load();
+        void load();
       }, 15000));
       failureTimersRef.current.push(window.setTimeout(() => {
         setScenarioMessage("RECOVERY COMPLETE · fleet state synchronized");
-        load();
+        void load();
       }, 24000));
+    } catch (error) {
+      setScenarioMessage(error instanceof Error ? error.message : "Scenario failed");
     } finally {
       setScenarioRunning(false);
     }
@@ -295,7 +331,8 @@ export default function Home() {
 
   const actOnOrder = async (order: Order, action: "dispatch" | "pickup" | "complete" | "cancel") => {
     try {
-      await post(`/api/v1/orders/${order.id}/${action}`);
+      const response = await post<Order>(`/api/v1/orders/${order.id}/${action}`);
+      if (response?.route?.length) orderRoutesRef.current.set(order.id, response.route);
       setSelectedOrderId(order.id);
       await load();
     } catch (error) {
@@ -330,7 +367,7 @@ export default function Home() {
       <div className={`scenario-banner ${scenarioRunning ? "running" : ""}`}>
         <div className="scenario-message"><span className="scenario-pulse" />{scenarioMessage}</div>
         <div className="map-meta">{graph ? `${graph.nodeCount.toLocaleString()} nodes · ${graph.edgeCount.toLocaleString()} road segments` : "Loading road network…"}</div>
-        <button onClick={load}>Refresh</button>
+        <button onClick={() => void load}>Refresh</button>
       </div>
 
       <section className="kpis">
@@ -346,14 +383,7 @@ export default function Home() {
             <div><div className="section-kicker">LIVE CITY VIEW</div><h2>Fleet position · Bengaluru</h2><div className="card-hint">Real OpenStreetMap geography + the same road graph used by the routing engine</div></div>
             <div className="head-stat"><span className="tiny-dot" />{graph ? "ROAD NETWORK ONLINE" : "LOADING MAP"}</div>
           </div>
-          <FleetMap
-            graph={graph}
-            drivers={driverList}
-            locations={locations}
-            orders={orders}
-            selectedOrderId={selectedOrderId}
-            onSelectOrder={setSelectedOrderId}
-          />
+          <FleetMap graph={graph} drivers={driverList} locations={locations} orders={orders} selectedOrderId={selectedOrderId} onSelectOrder={setSelectedOrderId} />
         </article>
 
         <aside className="right-column">
@@ -391,7 +421,7 @@ export default function Home() {
               <tbody>
                 {visibleOrders.length === 0 ? <tr><td colSpan={5} className="empty">No orders in the network</td></tr> : visibleOrders.map((order) => {
                   const selected = selectedOrderId === order.id;
-                  return <tr key={order.id} className={selected ? "selected-row" : ""} onClick={() => setSelectedOrderId(order.id)}><td className="strong">#{order.id}</td><td>#{order.pickupNode} → #{order.dropoffNode}</td><td><span className={`order-status ${statusClass(order.status)}`}>{order.status.replaceAll("_", " ")}</span></td><td>{order.assignedDriverId ? `#${order.assignedDriverId}` : "—"}</td><td className="actions" onClick={(event) => event.stopPropagation()}>{order.status === "CREATED" || order.status === "OFFERED" ? <button className="mini-button" onClick={() => actOnOrder(order, "dispatch")}>Dispatch</button> : null}{order.status === "ASSIGNED" ? <button className="mini-button" onClick={() => actOnOrder(order, "pickup")}>Pickup</button> : null}{order.status === "PICKED_UP" ? <button className="mini-button" onClick={() => actOnOrder(order, "complete")}>Complete</button> : null}{["CREATED","OFFERED","ASSIGNED"].includes(order.status) ? <button className="mini-button danger" onClick={() => actOnOrder(order, "cancel")}>Cancel</button> : null}</td></tr>;
+                  return <tr key={order.id} className={selected ? "selected-row" : ""} onClick={() => setSelectedOrderId(order.id)}><td className="strong">#{order.id}</td><td>#{order.pickupNode} → #{order.dropoffNode}</td><td><span className={`order-status ${statusClass(order.status)}`}>{order.status.replaceAll("_", " ")}</span></td><td>{order.assignedDriverId ? `#${order.assignedDriverId}` : "—"}</td><td className="actions" onClick={(event) => event.stopPropagation()}>{order.status === "CREATED" || order.status === "OFFERED" ? <button className="mini-button" onClick={() => void actOnOrder(order, "dispatch")}>Dispatch</button> : null}{order.status === "ASSIGNED" ? <button className="mini-button" onClick={() => void actOnOrder(order, "pickup")}>Pickup</button> : null}{order.status === "PICKED_UP" ? <button className="mini-button" onClick={() => void actOnOrder(order, "complete")}>Complete</button> : null}{["CREATED","OFFERED","ASSIGNED"].includes(order.status) ? <button className="mini-button danger" onClick={() => void actOnOrder(order, "cancel")}>Cancel</button> : null}</td></tr>;
                 })}
               </tbody>
             </table>
@@ -401,7 +431,7 @@ export default function Home() {
               <div className="detail-label">SELECTED ORDER</div><div className="detail-title">#{selectedOrder.id}</div>
               <div className="detail-status"><span className={`order-status ${statusClass(selectedOrder.status)}`}>{selectedOrder.status.replaceAll("_", " ")}</span></div>
               <div className="detail-grid"><div><span>Pickup</span><b>#{selectedOrder.pickupNode}</b></div><div><span>Drop-off</span><b>#{selectedOrder.dropoffNode}</b></div><div><span>Driver</span><b>{selectedOrder.assignedDriverId ? `#${selectedOrder.assignedDriverId}` : "Unassigned"}</b></div><div><span>Route nodes</span><b>{selectedOrder.route?.length ?? 0}</b></div></div>
-              <div className="detail-note">The map is centered on this order and renders the routing engine’s node sequence over Bengaluru geography.</div>
+              <div className="detail-note">The selected route stays pinned to the order while the live dashboard refreshes backend state.</div>
             </> : <div className="empty detail-empty">Select an order to inspect its route.</div>}
           </div>
         </div>
