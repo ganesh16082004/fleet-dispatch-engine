@@ -95,14 +95,12 @@ export default function CommandCenter() {
     const healthBody = await fetchJson<{ status?: string }>("/api/v1/health");
     const healthy = healthBody?.status === "UP";
     setBackendUp(healthy);
-
     const [summaryBody, driversBody, ordersBody, eventsBody] = await Promise.all([
       fetchJson<Summary>("/api/v1/dashboard/summary"),
       fetchJson<Driver[]>("/api/v1/drivers"),
       fetchJson<Order[]>("/api/v1/orders"),
       fetchJson<EventItem[]>("/api/v1/events/recent?limit=40")
     ]);
-
     if (summaryBody) setSummary(summaryBody);
     if (driversBody) {
       const next: Record<number, Driver> = {};
@@ -110,15 +108,11 @@ export default function CommandCenter() {
       setDrivers(next);
     }
     if (ordersBody) {
-      const merged = ordersBody.map((order) => ({
-        ...order,
-        route: order.route?.length ? order.route : orderRoutesRef.current.get(order.id) ?? []
-      }));
+      const merged = ordersBody.map((order) => ({ ...order, route: order.route?.length ? order.route : orderRoutesRef.current.get(order.id) ?? [] }));
       setOrders(merged);
       setSelectedOrderId((current) => current ?? merged.find((order) => ["ASSIGNED", "PICKED_UP", "RECOVERY_REQUIRED"].includes(order.status))?.id ?? null);
     }
     if (eventsBody) setEvents(eventsBody);
-
     if (!graphLoadedRef.current) {
       const graphBody = await fetchJson<DashboardGraph>("/api/v1/map/geojson");
       if (graphBody) {
@@ -126,10 +120,7 @@ export default function CommandCenter() {
         graphLoadedRef.current = true;
       }
     }
-
-    if (healthy && scenarioMessage.startsWith("Backend unavailable")) {
-      setScenarioMessage("Live Bengaluru operations console");
-    }
+    if (healthy && scenarioMessage.startsWith("Backend unavailable")) setScenarioMessage("Live Bengaluru operations console");
     if (!healthy) setScenarioMessage("Backend unavailable — check Spring Boot on :8080");
     setLastRefresh(Date.now());
   }, [scenarioMessage]);
@@ -195,7 +186,6 @@ export default function CommandCenter() {
     for (const socket of socketsRef.current.values()) socket.close();
   }, []);
 
-  const graphNodeIds = useMemo(() => graph ? Object.keys(graph.nodes).map(Number) : [], [graph]);
   const roadPairs = useMemo(() => {
     if (!graph) return [] as Array<[number, number]>;
     return graph.roads.features.map((feature) => {
@@ -208,10 +198,10 @@ export default function CommandCenter() {
 
   const driverList = useMemo(() => {
     const scenarioSet = new Set(scenarioDriverIds);
-    const base = scenarioDriverIds.length > 0
+    const selected = scenarioDriverIds.length > 0
       ? Object.values(drivers).filter((driver) => scenarioSet.has(driver.id))
       : Object.values(drivers);
-    return [...base].sort((a, b) => {
+    return [...selected].sort((a, b) => {
       const ai = scenarioDriverIds.indexOf(a.id);
       const bi = scenarioDriverIds.indexOf(b.id);
       return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi) || b.id - a.id;
@@ -259,71 +249,61 @@ export default function CommandCenter() {
     scenarioTimersRef.current = [];
     scenarioDriverNodesRef.current.clear();
 
-    const persistedAvailableDrivers = Object.values(drivers)
-      .filter((driver) => driver.status === "AVAILABLE")
-      .map((driver) => driver.currentNode)
-      .filter((node) => Number.isFinite(node));
+    const persistedBusyCoordinates = Object.values(drivers)
+      .filter((driver) => driver.status === "BUSY")
+      .map((driver) => graph.nodes[String(driver.currentNode)])
+      .filter((coordinate): coordinate is [number, number] => Array.isArray(coordinate));
+    const persistedOccupiedNodes = new Set(
+      Object.values(drivers)
+        .map((driver) => driver.currentNode)
+        .filter((node) => Number.isFinite(node))
+    );
 
-    const sampledPairs = 5_000;
-    const step = Math.max(1, Math.ceil(roadPairs.length / sampledPairs));
+    const step = Math.max(1, Math.ceil(roadPairs.length / 8_000));
     let primaryPair: [number, number] | null = null;
-    let pickupCoordinate: [number, number] | undefined;
-
     for (let index = 0; index < roadPairs.length; index += step) {
       const pair = roadPairs[index];
+      if (persistedOccupiedNodes.has(pair[0])) continue;
       const coordinate = graph.nodes[String(pair[0])];
       if (!coordinate) continue;
-      const nearestPersistedDriverDistance = persistedAvailableDrivers.length === 0
+      const nearestBusyDistance = persistedBusyCoordinates.length === 0
         ? Number.POSITIVE_INFINITY
-        : Math.min(...persistedAvailableDrivers.map((node) => {
-            const driverCoordinate = graph.nodes[String(node)];
-            return driverCoordinate ? haversineMeters(coordinate, driverCoordinate) : Number.POSITIVE_INFINITY;
-          }));
-      if (nearestPersistedDriverDistance > 8_000) {
+        : Math.min(...persistedBusyCoordinates.map((busyCoordinate) => haversineMeters(coordinate, busyCoordinate)));
+      if (nearestBusyDistance > 2_500) {
         primaryPair = pair;
-        pickupCoordinate = coordinate;
         break;
       }
     }
-
-    if (!primaryPair || !pickupCoordinate) {
-      setScenarioMessage("Scenario stopped: could not find an isolated pickup zone away from persisted available drivers");
+    if (!primaryPair) {
+      setScenarioMessage("Scenario stopped: could not find a clean road-graph pickup zone for the demo");
       setScenarioRunning(false);
       return;
     }
 
-    // Keep every demo driver at the exact pickup/handoff node. This guarantees a
-    // valid directed recovery route with zero rescue distance while preserving the
-    // production recovery selector and dispatch algorithm.
     const demoNode = primaryPair[0];
-    const ids = Array.from({ length: 6 }, (_, index) => Math.floor(Date.now() / 1000) * 10 + index + 1);
+    const base = Math.floor(Date.now() / 1000) * 10;
+    const ids = Array.from({ length: 6 }, (_, index) => base + index + 1);
     ids.forEach((id) => scenarioDriverNodesRef.current.set(id, demoNode));
     setScenarioDriverIds(ids);
-
     const primaryOrderId = Math.floor(Date.now() / 1000) + 900000;
 
     try {
-      setScenarioMessage("1 / 6 · registering six demo drivers in an isolated road-network zone…");
+      setScenarioMessage("1 / 6 · registering six demo drivers at the pickup node…");
       for (const id of ids) {
         await post("/api/v1/drivers", { id, currentNode: demoNode, status: "AVAILABLE" });
       }
-
       setScenarioMessage("2 / 6 · creating order from the live road graph…");
-      const created = await post<Order>("/api/v1/orders", {
-        id: primaryOrderId,
-        pickupNode: primaryPair[0],
-        dropoffNode: primaryPair[1]
-      });
+      const created = await post<Order>("/api/v1/orders", { id: primaryOrderId, pickupNode: primaryPair[0], dropoffNode: primaryPair[1] });
       if (!created) throw new Error("Primary order was not created");
 
-      setScenarioMessage("3 / 6 · route-aware dispatch selecting the nearest demo driver…");
+      setScenarioMessage("3 / 6 · real dispatch selecting one of the six demo drivers…");
       const assigned = await post<Order>(`/api/v1/orders/${primaryOrderId}/dispatch`);
       if (!assigned?.assignedDriverId) throw new Error("No feasible driver was found for the demo order");
       if (!ids.includes(assigned.assignedDriverId)) {
-        throw new Error(`Dispatch selected unexpected persisted driver #${assigned.assignedDriverId}; scenario isolation failed`);
+        throw new Error(`Dispatch selected unexpected persisted driver #${assigned.assignedDriverId}`);
       }
       const failedDriverId = assigned.assignedDriverId;
-      const failedNodeId = scenarioDriverNodesRef.current.get(failedDriverId) ?? primaryPair[0];
+      const failedNodeId = demoNode;
       if (assigned.route?.length) orderRoutesRef.current.set(primaryOrderId, assigned.route);
       startTelemetry(ids.filter((id) => id !== failedDriverId));
       await load();
@@ -331,7 +311,7 @@ export default function CommandCenter() {
 
       scenarioTimersRef.current.push(window.setTimeout(async () => {
         try {
-          setScenarioMessage(`4 / 6 · Driver #${failedDriverId} reached pickup → PICKED UP`);
+          setScenarioMessage(`4 / 6 · Driver #${failedDriverId} → PICKED UP`);
           const pickup = await post<Order>(`/api/v1/orders/${primaryOrderId}/pickup`);
           if (pickup?.route?.length) orderRoutesRef.current.set(primaryOrderId, pickup.route);
           await load();
@@ -342,7 +322,7 @@ export default function CommandCenter() {
 
       scenarioTimersRef.current.push(window.setTimeout(async () => {
         try {
-          setScenarioMessage(`5 / 6 · Driver #${failedDriverId} failed → recovery engine finding replacement at Node ${failedNodeId}`);
+          setScenarioMessage(`5 / 6 · Driver #${failedDriverId} failed → recovery at Node ${failedNodeId}`);
           await post(`/api/v1/recovery/drivers/${failedDriverId}/fail`);
           await load();
         } catch (error) {
@@ -353,7 +333,7 @@ export default function CommandCenter() {
       scenarioTimersRef.current.push(window.setTimeout(async () => {
         try {
           let latest: Order | null = null;
-          for (let attempt = 0; attempt < 12; attempt++) {
+          for (let attempt = 0; attempt < 16; attempt++) {
             latest = await fetchJson<Order>(`/api/v1/orders/${primaryOrderId}`);
             if (latest?.status === "ASSIGNED" && latest.assignedDriverId && latest.assignedDriverId !== failedDriverId) break;
             await new Promise((resolve) => window.setTimeout(resolve, 500));
@@ -361,14 +341,12 @@ export default function CommandCenter() {
           if (!latest?.assignedDriverId || latest.assignedDriverId === failedDriverId) {
             throw new Error("Recovery worker did not assign a replacement driver");
           }
-
           const replacementId = latest.assignedDriverId;
           setScenarioMessage(`5 / 6 · HANDOFF → replacement Driver #${replacementId}`);
           await load();
-
           scenarioTimersRef.current.push(window.setTimeout(async () => {
             try {
-              setScenarioMessage(`6 / 6 · replacement Driver #${replacementId} picked up → completing delivery…`);
+              setScenarioMessage(`6 / 6 · replacement Driver #${replacementId} picked up → completing…`);
               const pickup = await post<Order>(`/api/v1/orders/${primaryOrderId}/pickup`);
               if (pickup?.route?.length) orderRoutesRef.current.set(primaryOrderId, pickup.route);
               await new Promise((resolve) => window.setTimeout(resolve, 1200));
@@ -386,6 +364,7 @@ export default function CommandCenter() {
       }, 9500));
     } catch (error) {
       setScenarioMessage(error instanceof Error ? error.message : "Scenario failed");
+    } finally {
       setScenarioRunning(false);
     }
   };
@@ -394,11 +373,7 @@ export default function CommandCenter() {
     try {
       const response = await post<Order>(`/api/v1/orders/${order.id}/${action}`);
       if (response?.route?.length) orderRoutesRef.current.set(order.id, response.route);
-      if (response) {
-        setOrders((current) => current.map((item) => item.id === response.id
-          ? { ...response, route: response.route?.length ? response.route : orderRoutesRef.current.get(response.id) ?? item.route ?? [] }
-          : item));
-      }
+      if (response) setOrders((current) => current.map((item) => item.id === response.id ? { ...response, route: response.route?.length ? response.route : orderRoutesRef.current.get(response.id) ?? item.route ?? [] } : item));
       setSelectedOrderId(order.id);
       await load();
       setScenarioMessage(`${action.toUpperCase()} complete · Order #${order.id}`);
@@ -409,9 +384,7 @@ export default function CommandCenter() {
 
   const eventCopy = (event: EventItem) => {
     const payload = event.payload ?? {};
-    const subject = event.aggregateType === "DRIVER"
-      ? `Driver #${event.aggregateId.replace("driver-", "")}`
-      : `Order #${event.aggregateId.replace("order-", "")}`;
+    const subject = event.aggregateType === "DRIVER" ? `Driver #${event.aggregateId.replace("driver-", "")}` : `Order #${event.aggregateId.replace("order-", "")}`;
     const state = String(payload.status ?? event.eventType).replaceAll("_", " ");
     return `${subject} · ${state}`;
   };
@@ -426,16 +399,13 @@ export default function CommandCenter() {
           <button className="scenario-button" onClick={() => void runLiveScenario()} disabled={scenarioRunning || !graph || roadPairs.length === 0}>{scenarioRunning ? "Scenario running…" : "▶ Run full lifecycle"}</button>
         </div>
       </header>
-
-      <div className={`scenario-banner ${scenarioRunning ? "running" : ""}`}><div className="scenario-message"><span className="scenario-pulse" />{scenarioMessage}</div><div className="map-meta">{graph ? `${graph.nodeCount.toLocaleString()} nodes · ${graph.edgeCount.toLocaleString()} road segments` : "Loading road network…"}</div><button onClick={() => void load}>Refresh</button></div>
-
+      <div className={`scenario-banner ${scenarioRunning ? "running" : ""}`}><div className="scenario-message"><span className="scenario-pulse" />{scenarioMessage}</div><div className="map-meta">{graph ? `${graph.nodeCount.toLocaleString()} nodes · ${graph.edgeCount.toLocaleString()} road segments` : "Loading road network…"}</div><button onClick={() => void load()}>Refresh</button></div>
       <section className="kpis">
         <div className="card metric"><div className="metric-label">Fleet health</div><div className="metric-value">{activeDrivers}</div><div className="metric-foot"><b>{summary.availableDrivers}</b> available · <b>{summary.busyDrivers}</b> busy · <b>{summary.offlineDrivers}</b> offline</div></div>
         <div className="card metric"><div className="metric-label">Orders in motion</div><div className="metric-value">{summary.activeOrders}</div><div className="metric-foot"><b>{summary.assignedOrders}</b> assigned · <b>{summary.pickedUpOrders}</b> picked up</div></div>
         <div className="card metric"><div className="metric-label">Fleet utilization</div><div className="metric-value">{utilization}%</div><div className="metric-foot"><b>{summary.completedOrders}</b> completed · {summary.cancelledOrders} cancelled</div></div>
         <div className={`card metric ${summary.recoveryOrders > 0 ? "alert" : ""}`}><div className="metric-label">Recovery queue</div><div className="metric-value">{summary.recoveryOrders}</div><div className="metric-foot"><b>{summary.failedOutboxEvents}</b> failed outbox · <b>{summary.pendingOutboxEvents}</b> pending</div></div>
       </section>
-
       <section className="workspace">
         <article className="card map-card"><div className="card-head"><div><div className="section-kicker">LIVE CITY VIEW</div><h2>Fleet position · Bengaluru</h2><div className="card-hint">Real OpenStreetMap geography + the same road graph used by the routing engine</div></div><div className="head-stat"><span className="tiny-dot" />{graph ? "ROAD NETWORK ONLINE" : "LOADING MAP"}</div></div><FleetMap graph={graph} drivers={driverList} locations={locations} orders={orders} selectedOrderId={selectedOrderId} onSelectOrder={setSelectedOrderId} /></article>
         <aside className="right-column">
@@ -443,7 +413,6 @@ export default function CommandCenter() {
           <article className="card panel events-panel"><div className="card-head"><div><div className="section-kicker">EVENT BUS</div><h2>Operational event stream</h2><div className="card-hint">Kafka-backed history · latest state changes</div></div><span className="counter">{events.length}</span></div><div className="events">{events.length === 0 ? <div className="empty">Waiting for events…</div> : events.slice(0, 18).map((event) => <div className="event" key={event.eventId}><div className="event-time">{timeLabel(event.createdAt)}</div><div><div className="event-type">{event.eventType.replaceAll("_", " ")}</div><div className="event-copy">{eventCopy(event)}</div></div></div>)}</div></article>
         </aside>
       </section>
-
       <section className="card orders-card"><div className="card-head"><div><div className="section-kicker">DISPATCH WORKBENCH</div><h2>Orders in the network</h2><div className="card-hint">Select an order to focus its route, pickup and drop-off on the live map</div></div><div className="head-stat">Updated {timeLabel(lastRefresh)}</div></div><div className="order-layout"><div className="orders-scroll"><table className="table orders-table"><thead><tr><th>Order</th><th>Route</th><th>Status</th><th>Driver</th><th>Actions</th></tr></thead><tbody>{visibleOrders.length === 0 ? <tr><td colSpan={5} className="empty">No orders in the network</td></tr> : visibleOrders.map((order) => { const selected = selectedOrderId === order.id; return <tr key={order.id} className={selected ? "selected-row" : ""} onClick={() => setSelectedOrderId(order.id)}><td className="strong">#{order.id}</td><td>#{order.pickupNode} → #{order.dropoffNode}</td><td><span className={`order-status ${statusClass(order.status)}`}>{order.status.replaceAll("_", " ")}</span></td><td>{order.assignedDriverId ? `#${order.assignedDriverId}` : "—"}</td><td className="actions" onClick={(event) => event.stopPropagation()}>{["CREATED", "OFFERED"].includes(order.status) ? <button className="mini-button" onClick={() => void actOnOrder(order, "dispatch")}>Dispatch</button> : null}{order.status === "ASSIGNED" ? <button className="mini-button" onClick={() => void actOnOrder(order, "pickup")}>Pickup</button> : null}{order.status === "PICKED_UP" ? <button className="mini-button" onClick={() => void actOnOrder(order, "complete")}>Complete</button> : null}{["CREATED", "OFFERED", "ASSIGNED"].includes(order.status) ? <button className="mini-button danger" onClick={() => void actOnOrder(order, "cancel")}>Cancel</button> : null}</td></tr>; })}</tbody></table></div><div className="order-detail">{selectedOrder ? <><div className="detail-label">SELECTED ORDER</div><div className="detail-title">#{selectedOrder.id}</div><div className="detail-status"><span className={`order-status ${statusClass(selectedOrder.status)}`}>{selectedOrder.status.replaceAll("_", " ")}</span></div><div className="detail-grid"><div><span>Pickup</span><b>#{selectedOrder.pickupNode}</b></div><div><span>Drop-off</span><b>#{selectedOrder.dropoffNode}</b></div><div><span>Driver</span><b>{selectedOrder.assignedDriverId ? `#${selectedOrder.assignedDriverId}` : "Unassigned"}</b></div><div><span>Route nodes</span><b>{selectedOrder.route?.length ?? 0}</b></div></div><div className="detail-note">This panel follows the real order state returned by Spring Boot. During recovery, the driver ID changes to the replacement selected by the backend recovery worker.</div></> : <div className="empty detail-empty">Select an order to inspect its route.</div>}</div></div></section>
       <footer className="footer-row"><div><span className="dot-row"><span className={`small-dot ${backendUp ? "green" : "red"}`} />Backend {backendUp ? "healthy" : "offline"}</span><span className="dot-row"><span className={`small-dot ${connected ? "green" : "red"}`} />Telemetry {connected ? "connected" : "disconnected"}</span></div><div>Spring Boot :8080 · Dashboard :3000/:3001 · Bengaluru road graph</div></footer>
     </main>
