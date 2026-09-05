@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { Map as LeafletMap, CircleMarker, LayerGroup, Polyline } from "leaflet";
+import type { Map as LeafletMap, CircleMarker, LayerGroup, Polyline, Rectangle } from "leaflet";
 
 export type MapDriver = { id: number; currentNode: number; status: string };
 export type MapOrder = { id: number; pickupNode: number; dropoffNode: number; status: string; assignedDriverId?: number | null; route?: number[] };
@@ -9,6 +9,7 @@ export type MapGraph = {
   roads: GeoJSON.FeatureCollection<GeoJSON.LineString, Record<string, unknown>>;
   nodes: Record<string, [number, number]>;
   center: [number, number];
+  bounds: [number, number, number, number];
   nodeCount: number;
   edgeCount: number;
 };
@@ -32,6 +33,8 @@ export default function FleetMap({
   const mapRef = useRef<LeafletMap | null>(null);
   const driverLayerRef = useRef<LayerGroup | null>(null);
   const routeLayerRef = useRef<LayerGroup | null>(null);
+  const boundaryRef = useRef<Rectangle | null>(null);
+  const roadsRef = useRef<GeoJSON.GeoJSON | null>(null);
   const graphRef = useRef<MapGraph | null>(graph);
   const [mapReady, setMapReady] = useState(false);
 
@@ -44,8 +47,8 @@ export default function FleetMap({
       const map = L.map(elementRef.current, {
         zoomControl: false,
         preferCanvas: true,
-        minZoom: 10,
-        maxZoom: 18
+        minZoom: 9,
+        maxZoom: 19
       });
       L.control.zoom({ position: "bottomright" }).addTo(map);
       L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -65,6 +68,8 @@ export default function FleetMap({
       mapRef.current = null;
       driverLayerRef.current = null;
       routeLayerRef.current = null;
+      boundaryRef.current = null;
+      roadsRef.current = null;
       setMapReady(false);
     };
   }, []);
@@ -74,11 +79,39 @@ export default function FleetMap({
     if (!mapReady || !map || !graph) return;
     import("leaflet").then((L) => {
       if (!mapRef.current) return;
-      const roads = L.geoJSON(graph.roads, {
-        style: { color: "#56746a", opacity: 0.52, weight: 1.25, lineCap: "round", lineJoin: "round" }
-      });
-      roads.addTo(map);
-      map.setView(graph.center, Math.max(11, map.getZoom()));
+
+      roadsRef.current?.remove();
+      boundaryRef.current?.remove();
+
+      roadsRef.current = L.geoJSON(graph.roads, {
+        style: {
+          color: "#56746a",
+          opacity: 0.48,
+          weight: 1.15,
+          lineCap: "round",
+          lineJoin: "round"
+        }
+      }).addTo(map);
+
+      // The boundary comes directly from the minimum/maximum coordinates of the
+      // same road graph consumed by Dijkstra/A*. It is not a guessed city box.
+      const [minLongitude, minLatitude, maxLongitude, maxLatitude] = graph.bounds;
+      boundaryRef.current = L.rectangle(
+        [[minLatitude, minLongitude], [maxLatitude, maxLongitude]],
+        {
+          color: "#7de2b0",
+          weight: 1,
+          opacity: 0.7,
+          fillOpacity: 0.02,
+          dashArray: "5 6",
+          interactive: false
+        }
+      ).addTo(map);
+
+      map.fitBounds(
+        [[minLatitude, minLongitude], [maxLatitude, maxLongitude]],
+        { padding: [18, 18], maxZoom: 14 }
+      );
     });
   }, [graph, mapReady]);
 
@@ -97,16 +130,17 @@ export default function FleetMap({
         const isOffline = driver.status === "OFFLINE";
         const isBusy = driver.status === "BUSY";
         const marker: CircleMarker = L.circleMarker(coordinate, {
-          radius: isOffline ? 6 : 7,
+          radius: isOffline ? 7 : 7,
           color: "#07110d",
           weight: 2,
           fillColor: isOffline ? "#727e79" : isBusy ? "#d7b158" : "#4fda96",
           fillOpacity: isOffline ? 0.55 : 0.97
         });
-        marker.bindTooltip(`<strong>Driver #${driver.id}</strong><br/>${driver.status}<br/>Node ${nodeId}`, { direction: "top", offset: [0, -6] });
+        const assignedOrder = orders.find((order) => order.assignedDriverId === driver.id && order.status !== "COMPLETED" && order.status !== "CANCELLED");
+        const orderState = assignedOrder ? `\nOrder #${assignedOrder.id} · ${assignedOrder.status.replaceAll("_", " ")}` : "";
+        marker.bindTooltip(`<strong>Driver #${driver.id}</strong><br/>${driver.status}<br/>Node ${nodeId}${orderState.replaceAll("\n", "<br/>")}`, { direction: "top", offset: [0, -6] });
         marker.on("click", () => {
-          const assigned = orders.find((order) => order.assignedDriverId === driver.id);
-          if (assigned) onSelectOrder(assigned.id);
+          if (assignedOrder) onSelectOrder(assignedOrder.id);
         });
         marker.addTo(layer);
       }
@@ -130,8 +164,13 @@ export default function FleetMap({
         .filter((value): value is [number, number] => Array.isArray(value));
 
       if (routeCoordinates.length >= 2) {
+        const routeColor = order.status === "RECOVERY_REQUIRED" ? "#e36d64" : order.status === "COMPLETED" ? "#74817d" : "#19b873";
         const route: Polyline = L.polyline(routeCoordinates, {
-          color: "#19b873", weight: 5, opacity: 0.88, lineCap: "round", lineJoin: "round"
+          color: routeColor,
+          weight: 5,
+          opacity: 0.88,
+          lineCap: "round",
+          lineJoin: "round"
         });
         route.addTo(layer);
       }
@@ -144,5 +183,5 @@ export default function FleetMap({
     });
   }, [selectedOrderId, orders, mapReady]);
 
-  return <div ref={elementRef} className="fleet-map-canvas" aria-label="Bengaluru live fleet map" />;
+  return <div ref={elementRef} className="fleet-map-canvas" aria-label="Bengaluru live fleet map using the routing road graph boundary" />;
 }
