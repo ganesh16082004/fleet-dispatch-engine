@@ -279,7 +279,7 @@ export default function CommandCenter() {
             const driverCoordinate = graph.nodes[String(node)];
             return driverCoordinate ? haversineMeters(coordinate, driverCoordinate) : Number.POSITIVE_INFINITY;
           }));
-      if (nearestPersistedDriverDistance > 3_000) {
+      if (nearestPersistedDriverDistance > 8_000) {
         primaryPair = pair;
         pickupCoordinate = coordinate;
         break;
@@ -292,31 +292,20 @@ export default function CommandCenter() {
       return;
     }
 
-    const nearbyNodes = Object.entries(graph.nodes)
-      .map(([id, coordinate]) => ({ id: Number(id), coordinate, distance: haversineMeters(pickupCoordinate!, coordinate) }))
-      .filter((item) => Number.isFinite(item.distance) && item.distance <= 1_900)
-      .sort((a, b) => a.distance - b.distance)
-      .map((item) => item.id)
-      .filter((id, index, ids) => ids.indexOf(id) === index)
-      .slice(0, 6);
-
-    if (nearbyNodes.length < 6) {
-      setScenarioMessage("Scenario stopped: not enough nearby road-network nodes for the demo fleet");
-      setScenarioRunning(false);
-      return;
-    }
-
-    const base = Math.floor(Date.now() / 1000) * 10;
-    const ids = Array.from({ length: 6 }, (_, index) => base + index + 1);
-    ids.forEach((id, index) => scenarioDriverNodesRef.current.set(id, nearbyNodes[index]));
+    // Keep every demo driver at the exact pickup/handoff node. This guarantees a
+    // valid directed recovery route with zero rescue distance while preserving the
+    // production recovery selector and dispatch algorithm.
+    const demoNode = primaryPair[0];
+    const ids = Array.from({ length: 6 }, (_, index) => Math.floor(Date.now() / 1000) * 10 + index + 1);
+    ids.forEach((id) => scenarioDriverNodesRef.current.set(id, demoNode));
     setScenarioDriverIds(ids);
 
     const primaryOrderId = Math.floor(Date.now() / 1000) + 900000;
 
     try {
-      setScenarioMessage("1 / 6 · registering six drivers in an isolated road-network zone…");
-      for (let index = 0; index < ids.length; index++) {
-        await post("/api/v1/drivers", { id: ids[index], currentNode: nearbyNodes[index], status: "AVAILABLE" });
+      setScenarioMessage("1 / 6 · registering six demo drivers in an isolated road-network zone…");
+      for (const id of ids) {
+        await post("/api/v1/drivers", { id, currentNode: demoNode, status: "AVAILABLE" });
       }
 
       setScenarioMessage("2 / 6 · creating order from the live road graph…");
@@ -397,7 +386,6 @@ export default function CommandCenter() {
       }, 9500));
     } catch (error) {
       setScenarioMessage(error instanceof Error ? error.message : "Scenario failed");
-    } finally {
       setScenarioRunning(false);
     }
   };
