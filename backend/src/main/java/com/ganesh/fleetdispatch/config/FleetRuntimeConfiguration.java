@@ -136,7 +136,8 @@ public class FleetRuntimeConfiguration {
     public DriverLocationWebSocketServer driverLocationWebSocketServer(
             DriverLocationTracker driverLocationTracker) {
         return new DriverLocationWebSocketServer(
-                new InetSocketAddress("127.0.0.1", 8087),
+                new InetSocketAddress(stringProperty("FLEET_WS_BIND_HOST", "127.0.0.1"),
+                        intProperty("FLEET_DRIVER_WS_PORT", 8087)),
                 driverLocationTracker);
     }
 
@@ -146,23 +147,35 @@ public class FleetRuntimeConfiguration {
             DriverHeartbeatStore driverHeartbeatStore,
             DriverLocationTracker driverLocationTracker) {
         DashboardWebSocketServer server = new DashboardWebSocketServer(
-                new InetSocketAddress("127.0.0.1", 8088),
+                new InetSocketAddress(stringProperty("FLEET_WS_BIND_HOST", "127.0.0.1"),
+                        intProperty("FLEET_DASHBOARD_WS_PORT", 8088)),
                 driverStateStore,
                 driverHeartbeatStore);
         driverLocationTracker.addListener(server);
         return server;
     }
 
-    private static long longProperty(String key, long defaultValue) {
+    private static String stringProperty(String key, String defaultValue) {
         String value = System.getProperty(key);
         if (value == null || value.isBlank()) {
             value = System.getenv(key);
         }
-        if (value == null || value.isBlank()) {
-            return defaultValue;
-        }
+        return value == null || value.isBlank() ? defaultValue : value.trim();
+    }
+
+    private static int intProperty(String key, int defaultValue) {
+        String value = stringProperty(key, Integer.toString(defaultValue));
         try {
-            return Long.parseLong(value.trim());
+            return Integer.parseInt(value);
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException(key + " must be a valid integer", exception);
+        }
+    }
+
+    private static long longProperty(String key, long defaultValue) {
+        String value = stringProperty(key, Long.toString(defaultValue));
+        try {
+            return Long.parseLong(value);
         } catch (NumberFormatException exception) {
             throw new IllegalArgumentException(key + " must be a valid long", exception);
         }
