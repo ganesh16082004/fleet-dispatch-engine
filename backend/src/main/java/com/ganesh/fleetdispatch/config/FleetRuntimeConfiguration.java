@@ -1,13 +1,11 @@
 package com.ganesh.fleetdispatch.config;
 
-import com.ganesh.fleetdispatch.dispatch.DashboardWebSocketServer;
 import com.ganesh.fleetdispatch.dispatch.DeliveryConstraints;
 import com.ganesh.fleetdispatch.dispatch.DispatchEngine;
 import com.ganesh.fleetdispatch.dispatch.DriverFailureDetector;
 import com.ganesh.fleetdispatch.dispatch.DriverFailureRecoveryCoordinator;
 import com.ganesh.fleetdispatch.dispatch.DriverHeartbeatStore;
 import com.ganesh.fleetdispatch.dispatch.DriverLocationTracker;
-import com.ganesh.fleetdispatch.dispatch.DriverLocationWebSocketServer;
 import com.ganesh.fleetdispatch.dispatch.DriverRecoveryQueue;
 import com.ganesh.fleetdispatch.dispatch.DriverRecoveryWorker;
 import com.ganesh.fleetdispatch.dispatch.DriverRouteStore;
@@ -23,7 +21,6 @@ import com.ganesh.fleetdispatch.routing.Router;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.net.InetSocketAddress;
 import java.util.Optional;
 
 @Configuration
@@ -132,50 +129,16 @@ public class FleetRuntimeConfiguration {
                 eventPublisher);
     }
 
-    @Bean(initMethod = "start", destroyMethod = "stop")
-    public DriverLocationWebSocketServer driverLocationWebSocketServer(
-            DriverLocationTracker driverLocationTracker) {
-        return new DriverLocationWebSocketServer(
-                new InetSocketAddress(stringProperty("FLEET_WS_BIND_HOST", "127.0.0.1"),
-                        intProperty("FLEET_DRIVER_WS_PORT", 8087)),
-                driverLocationTracker);
-    }
-
-    @Bean(initMethod = "start", destroyMethod = "stop")
-    public DashboardWebSocketServer dashboardWebSocketServer(
-            DriverStateStore driverStateStore,
-            DriverHeartbeatStore driverHeartbeatStore,
-            DriverLocationTracker driverLocationTracker) {
-        DashboardWebSocketServer server = new DashboardWebSocketServer(
-                new InetSocketAddress(stringProperty("FLEET_WS_BIND_HOST", "127.0.0.1"),
-                        intProperty("FLEET_DASHBOARD_WS_PORT", 8088)),
-                driverStateStore,
-                driverHeartbeatStore);
-        driverLocationTracker.addListener(server);
-        return server;
-    }
-
-    private static String stringProperty(String key, String defaultValue) {
+    private static long longProperty(String key, long defaultValue) {
         String value = System.getProperty(key);
         if (value == null || value.isBlank()) {
             value = System.getenv(key);
         }
-        return value == null || value.isBlank() ? defaultValue : value.trim();
-    }
-
-    private static int intProperty(String key, int defaultValue) {
-        String value = stringProperty(key, Integer.toString(defaultValue));
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException exception) {
-            throw new IllegalArgumentException(key + " must be a valid integer", exception);
+        if (value == null || value.isBlank()) {
+            return defaultValue;
         }
-    }
-
-    private static long longProperty(String key, long defaultValue) {
-        String value = stringProperty(key, Long.toString(defaultValue));
         try {
-            return Long.parseLong(value);
+            return Long.parseLong(value.trim());
         } catch (NumberFormatException exception) {
             throw new IllegalArgumentException(key + " must be a valid long", exception);
         }
