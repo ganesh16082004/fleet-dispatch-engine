@@ -64,38 +64,69 @@ export default function Home() {
   const sequenceRef = useRef<Map<number, number>>(new Map());
   const timerRef = useRef<number | null>(null);
   const failureTimersRef = useRef<number[]>([]);
+  const graphLoadedRef = useRef(false);
 
   const load = useCallback(async () => {
-    try {
-      const [healthResponse, summaryResponse, driversResponse, ordersResponse, eventsResponse, graphResponse] = await Promise.all([
-        fetch(`${API_BASE}/actuator/health/readiness`, { cache: "no-store" }),
-        fetch(`${API_BASE}/api/v1/dashboard/summary`, { cache: "no-store" }),
-        fetch(`${API_BASE}/api/v1/drivers`, { cache: "no-store" }),
-        fetch(`${API_BASE}/api/v1/orders`, { cache: "no-store" }),
-        fetch(`${API_BASE}/api/v1/events/recent?limit=40`, { cache: "no-store" }),
-        fetch(`${API_BASE}/api/v1/map/geojson`, { cache: "no-store" })
-      ]);
+    const fetchJson = async <T,>(path: string): Promise<T | null> => {
+      try {
+        const response = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+        if (!response.ok) return null;
+        return await response.json() as T;
+      } catch {
+        return null;
+      }
+    };
 
-      setBackendUp(healthResponse.ok);
-      if (summaryResponse.ok) setSummary(await summaryResponse.json());
-      if (driversResponse.ok) {
-        const body = (await driversResponse.json()) as Driver[];
-        const next: DriverMap = {};
-        for (const driver of body) next[driver.id] = driver;
-        setDrivers(next);
-      }
-      if (ordersResponse.ok) {
-        const body = (await ordersResponse.json()) as Order[];
-        setOrders(body);
-        setSelectedOrderId((current) => current ?? body.find((order) => order.status === "ASSIGNED")?.id ?? null);
-      }
-      if (eventsResponse.ok) setEvents(await eventsResponse.json());
-      if (graphResponse.ok) setGraph(await graphResponse.json());
-      setLastRefresh(Date.now());
-    } catch {
-      setBackendUp(false);
+    const healthResponse = await fetch(`${API_BASE}/actuator/health/readiness`, { cache: "no-store" }).catch(() => null);
+    const healthy = !!healthResponse?.ok;
+    setBackendUp(healthy);
+    if (!healthy) {
       setScenarioMessage("Backend unavailable — check Spring Boot on :8080");
     }
+
+    const [summaryBody, driversBody, ordersBody, eventsBody] = await Promise.all([
+      fetchJson<Summary>("/api/v1/dashboard/summary"),
+      fetchJson<Driver[]>("/api/v1/drivers"),
+      fetchJson<Order[]>("/api/v1/orders"),
+      fetchJson<EventItem[]>("/api/v1/events/recent?limit=40")
+    ]);
+
+    if (summaryBody) setSummary(summaryBody);
+    if (driversBody) {
+      const next: DriverMap = {};
+      for (const driver of driversBody) next[driver.id] = driver;
+      setDrivers(next);
+    }
+    if (ordersBody) {
+      setOrders(ordersBody);
+      setSelectedOrderId((current) => current ?? ordersBody.find((order) => order.status === "ASSIGNED")?.id ?? null);
+    }
+    if (eventsBody) setEvents(eventsBody);
+
+    if (!graphLoadedRef.current) {
+      const graphBody = await fetchJson<MapGraph>("/api/v1/map/geojson");
+      if (graphBody) {
+        setGraph(graphBody);
+        graphLoadedRef.current = true;
+      } else {
+        const metadata = await fetchJson<{
+          center: [number, number];
+          bounds: [number, number, number, number];
+          nodeCount: number;
+          edgeCount: number;
+        }>("/api/v1/map/metadata");
+        if (metadata) {
+          setGraph({
+            roads: { type: "FeatureCollection", features: [] },
+            nodes: {},
+            ...metadata
+          });
+          graphLoadedRef.current = true;
+        }
+      }
+    }
+
+    setLastRefresh(Date.now());
   }, []);
 
   useEffect(() => {
@@ -292,7 +323,7 @@ export default function Home() {
         <div className="top-actions">
           <div className={`system-pill ${backendUp ? "ok" : "bad"}`}><span />{backendUp ? "SYSTEM OPERATIONAL" : "BACKEND OFFLINE"}</div>
           <div className={`system-pill ${connected ? "ok" : "bad"}`}><span />{connected ? "LIVE TELEMETRY" : "API ONLY"}</div>
-          <button className="scenario-button" onClick={runLiveScenario} disabled={scenarioRunning || !graph}>{scenarioRunning ? "Scenario running…" : "▶ Run dispatch scenario"}</button>
+          <button className="scenario-button" onClick={runLiveScenario} disabled={scenarioRunning || !graph || graphNodeIds.length < 30}>{scenarioRunning ? "Scenario running…" : "▶ Run dispatch scenario"}</button>
         </div>
       </header>
 
