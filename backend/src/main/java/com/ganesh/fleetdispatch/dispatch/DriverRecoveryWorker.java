@@ -153,10 +153,10 @@ public final class DriverRecoveryWorker {
                 "ORDER",
                 Map.of(
                         "orderId", assignment.orderId(),
-                        "replacementDriverId", assignment.replacementDriverId(),
+                        "replacementDriverId", assignment.driverId(),
                         "failedDriverId", task.failedDriverId(),
                         "handoffNode", task.handoffNode().value(),
-                        "driverToHandoffDistanceMeters", assignment.driverToHandoffRoute().distanceMeters(),
-                        "handoffToDropoffDistanceMeters", assignment.handoffToDropoffRoute().distanceMeters()));
+                        "driverToHandoffDistanceMeters", assignment.driverToHandoffRoute().totalDistanceMeters(),
+                        "handoffToDropoffDistanceMeters", assignment.handoffToDropoffRoute().totalDistanceMeters()));
     }
 }
