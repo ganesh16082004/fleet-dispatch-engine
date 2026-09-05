@@ -14,6 +14,8 @@ import com.ganesh.fleetdispatch.graph.NodeId;
 import com.ganesh.fleetdispatch.domain.Location;
 import com.ganesh.fleetdispatch.routing.AStarRouter;
 import com.ganesh.fleetdispatch.routing.Router;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -26,13 +28,23 @@ import java.util.Map;
 
 @Configuration
 public class FleetEngineConfiguration {
+    private static final Logger log = LoggerFactory.getLogger(FleetEngineConfiguration.class);
+
     @Bean
     public RoadGraph roadGraph() {
-        Path nodes = Path.of(System.getenv().getOrDefault("FLEET_NODES_FILE", "data/nodes.csv"));
-        Path edges = Path.of(System.getenv().getOrDefault("FLEET_EDGES_FILE", "data/edges.csv"));
-        if (Files.exists(nodes) && Files.exists(edges)) {
-            return new CsvRoadNetworkLoader(nodes, edges).load();
+        String nodesFile = configuredPath("FLEET_NODES_FILE", "data/processed/bengaluru/nodes.csv");
+        String edgesFile = configuredPath("FLEET_EDGES_FILE", "data/processed/bengaluru/edges.csv");
+
+        Path nodes = Path.of(nodesFile);
+        Path edges = Path.of(edgesFile);
+        if (Files.isRegularFile(nodes) && Files.isRegularFile(edges)) {
+            RoadGraph graph = new CsvRoadNetworkLoader(nodes, edges).load();
+            log.info("Loaded road network from CSV: nodesFile={}, edgesFile={}, nodes={}, edges={}",
+                    nodes.toAbsolutePath(), edges.toAbsolutePath(), graph.nodeCount(), graph.edgeCount());
+            return graph;
         }
+
+        log.warn("Road-network CSV files not found (nodes={}, edges={}); using demo graph", nodes.toAbsolutePath(), edges.toAbsolutePath());
         return demoGraph();
     }
 
@@ -59,6 +71,18 @@ public class FleetEngineConfiguration {
             Router router) {
         CandidateSelector selector = new CandidateSelector(drivers, graph);
         return new DispatchEngine(selector, drivers, orders, router, 2_000.0, 10);
+    }
+
+    private static String configuredPath(String key, String defaultValue) {
+        String systemProperty = System.getProperty(key);
+        if (systemProperty != null && !systemProperty.isBlank()) {
+            return systemProperty.trim();
+        }
+        String environment = System.getenv(key);
+        if (environment != null && !environment.isBlank()) {
+            return environment.trim();
+        }
+        return defaultValue;
     }
 
     private static RoadGraph demoGraph() {
