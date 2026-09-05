@@ -49,7 +49,9 @@ export default function FleetMap({
         zoomControl: false,
         preferCanvas: true,
         minZoom: 9,
-        maxZoom: 19
+        maxZoom: 19,
+        worldCopyJump: false,
+        maxBoundsViscosity: 1.0
       });
       L.control.zoom({ position: "bottomright" }).addTo(map);
       L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -98,25 +100,24 @@ export default function FleetMap({
         }
       }).addTo(map);
 
-      // The boundary comes directly from the minimum/maximum coordinates of the
-      // same complete road graph consumed by Dijkstra/A*. It is not a guessed city box.
       const [minLongitude, minLatitude, maxLongitude, maxLatitude] = graph.bounds;
-      boundaryRef.current = L.rectangle(
-        [[minLatitude, minLongitude], [maxLatitude, maxLongitude]],
-        {
-          color: "#7de2b0",
-          weight: 1,
-          opacity: 0.7,
-          fillOpacity: 0.02,
-          dashArray: "5 6",
-          interactive: false
-        }
-      ).addTo(map);
+      const graphBounds: [[number, number], [number, number]] = [
+        [minLatitude, minLongitude],
+        [maxLatitude, maxLongitude]
+      ];
 
-      map.fitBounds(
-        [[minLatitude, minLongitude], [maxLatitude, maxLongitude]],
-        { padding: [18, 18], maxZoom: 14 }
-      );
+      map.setMaxBounds(graphBounds);
+      map.fitBounds(graphBounds, { padding: [18, 18], maxZoom: 14 });
+
+      boundaryRef.current = L.rectangle(graphBounds, {
+        color: "#7de2b0",
+        weight: 1,
+        opacity: 0.7,
+        fillOpacity: 0.02,
+        dashArray: "5 6",
+        interactive: false
+      }).addTo(map);
+
       renderedGraphSignatureRef.current = signature;
     });
   }, [graph, mapReady]);
@@ -136,7 +137,7 @@ export default function FleetMap({
         const isOffline = driver.status === "OFFLINE";
         const isBusy = driver.status === "BUSY";
         const marker: CircleMarker = L.circleMarker(coordinate, {
-          radius: isOffline ? 7 : 7,
+          radius: 7,
           color: "#07110d",
           weight: 2,
           fillColor: isOffline ? "#727e79" : isBusy ? "#d7b158" : "#4fda96",
