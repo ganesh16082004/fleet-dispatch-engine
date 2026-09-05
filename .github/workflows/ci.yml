@@ -7,7 +7,8 @@ on:
     branches: [ main ]
 
 jobs:
-  build-and-test:
+  backend:
+    name: Backend build and test
     runs-on: ubuntu-latest
 
     steps:
@@ -21,5 +22,35 @@ jobs:
           java-version: '21'
           cache: maven
 
-      - name: Build and test
+      - name: Test
         run: mvn -B test
+
+      - name: Package
+        run: mvn -B -DskipTests package
+
+  dashboard:
+    name: Dashboard typecheck and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: dashboard/package.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
