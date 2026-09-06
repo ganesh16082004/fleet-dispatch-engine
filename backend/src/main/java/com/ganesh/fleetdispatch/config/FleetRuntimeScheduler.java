@@ -1,6 +1,6 @@
 package com.ganesh.fleetdispatch.config;
 
-import com.ganesh.fleetdispatch.dispatch.DashboardWebSocketServer;
+import com.ganesh.fleetdispatch.dispatch.DashboardWebSocketHandler;
 import com.ganesh.fleetdispatch.dispatch.DriverFailureDetection;
 import com.ganesh.fleetdispatch.dispatch.DriverFailureDetector;
 import com.ganesh.fleetdispatch.dispatch.DriverRecoveryWorker;
@@ -25,7 +25,7 @@ public class FleetRuntimeScheduler {
 
     private final DriverFailureDetector failureDetector;
     private final DriverRecoveryWorker recoveryWorker;
-    private final DashboardWebSocketServer dashboardWebSocketServer;
+    private final DashboardWebSocketHandler dashboardWebSocketHandler;
     private final DriverStateStore driverStateStore;
     private final OrderStateStore orderStateStore;
     private final DriverRepository driverRepository;
@@ -34,14 +34,14 @@ public class FleetRuntimeScheduler {
     public FleetRuntimeScheduler(
             DriverFailureDetector failureDetector,
             DriverRecoveryWorker recoveryWorker,
-            DashboardWebSocketServer dashboardWebSocketServer,
+            DashboardWebSocketHandler dashboardWebSocketHandler,
             DriverStateStore driverStateStore,
             OrderStateStore orderStateStore,
             DriverRepository driverRepository,
             OrderRepository orderRepository) {
         this.failureDetector = failureDetector;
         this.recoveryWorker = recoveryWorker;
-        this.dashboardWebSocketServer = dashboardWebSocketServer;
+        this.dashboardWebSocketHandler = dashboardWebSocketHandler;
         this.driverStateStore = driverStateStore;
         this.orderStateStore = orderStateStore;
         this.driverRepository = driverRepository;
@@ -71,7 +71,7 @@ public class FleetRuntimeScheduler {
         if (!detections.isEmpty() || !assignments.isEmpty()) {
             log.info("Fleet recovery tick: detectedFailures={}, recoveryAssignments={}",
                     detections.size(), assignments.size());
-            dashboardWebSocketServer.broadcastSnapshot();
+            dashboardWebSocketHandler.broadcastSnapshot();
         }
     }
 }
