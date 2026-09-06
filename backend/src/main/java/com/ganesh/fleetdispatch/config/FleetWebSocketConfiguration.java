@@ -4,8 +4,9 @@ import com.ganesh.fleetdispatch.dispatch.DashboardWebSocketHandler;
 import com.ganesh.fleetdispatch.dispatch.DriverLocationMessageCodec;
 import com.ganesh.fleetdispatch.dispatch.DriverLocationTracker;
 import com.ganesh.fleetdispatch.dispatch.DriverLocationWebSocketHandler;
-import com.ganesh.fleetdispatch.dispatch.DriverStateStore;
 import com.ganesh.fleetdispatch.dispatch.DriverHeartbeatStore;
+import com.ganesh.fleetdispatch.dispatch.DriverStateStore;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
@@ -15,21 +16,21 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 @Configuration
 @EnableWebSocket
 public class FleetWebSocketConfiguration implements WebSocketConfigurer {
-    private final DriverLocationWebSocketHandler driverLocationHandler;
-    private final DashboardWebSocketHandler dashboardHandler;
+    private final ObjectProvider<DriverLocationWebSocketHandler> driverLocationHandlerProvider;
+    private final ObjectProvider<DashboardWebSocketHandler> dashboardHandlerProvider;
 
     public FleetWebSocketConfiguration(
-            DriverLocationWebSocketHandler driverLocationHandler,
-            DashboardWebSocketHandler dashboardHandler) {
-        this.driverLocationHandler = driverLocationHandler;
-        this.dashboardHandler = dashboardHandler;
+            ObjectProvider<DriverLocationWebSocketHandler> driverLocationHandlerProvider,
+            ObjectProvider<DashboardWebSocketHandler> dashboardHandlerProvider) {
+        this.driverLocationHandlerProvider = driverLocationHandlerProvider;
+        this.dashboardHandlerProvider = dashboardHandlerProvider;
     }
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        registry.addHandler(dashboardHandler, "/ws/dashboard")
+        registry.addHandler(dashboardHandlerProvider.getObject(), "/ws/dashboard")
                 .setAllowedOriginPatterns(allowedOriginPatterns());
-        registry.addHandler(driverLocationHandler, "/ws/drivers/{driverId}")
+        registry.addHandler(driverLocationHandlerProvider.getObject(), "/ws/drivers/{driverId}")
                 .setAllowedOriginPatterns(allowedOriginPatterns());
     }
 
